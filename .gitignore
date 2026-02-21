@@ -2,3 +2,4 @@
 dist/
 node_modules/
 .env-example
+server\epsilon-del-firebase-adminsdk-fbsvc-ee6e789edc.json
