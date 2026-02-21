@@ -1,4 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
+import type { UserMetadata, Solve } from '../../shared/types'
+import { metadataToAgentContextString } from './firebaseMetadata'
 
 function getClient() {
   const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined
@@ -172,36 +174,61 @@ Rules:
 // Voice tutor — fast conversational AI
 export interface TutorMessage { role: 'user' | 'assistant'; content: string }
 
+/**
+ * Build a concise, image-free summary of the student's solve history.
+ * Solves are expected newest-first (as returned by Firestore).
+ * Base64 fields (problemImage, finalWorking, FeedbackEntry.snapshot) are intentionally excluded.
+ */
+function buildSolveSummary(solves: Solve[]): string {
+  if (!solves.length) return ''
+  const recent = solves.slice(0, 10)
+  const lines = recent.map((s) => {
+    const problem = s.problem.length > 80 ? s.problem.slice(0, 80) + '…' : s.problem
+    const checks = s.feedbackHistory.length
+    const hintCount = s.feedbackHistory.flatMap((f) => f.hints).length
+    const incorrectChecks = s.feedbackHistory.filter((f) => !f.isCorrect).length
+
+    let outcome: string
+    if (s.status === 'completed') {
+      outcome = 'completed'
+      if (s.finalFeedback) {
+        const fb = s.finalFeedback.length > 60 ? s.finalFeedback.slice(0, 60) + '…' : s.finalFeedback
+        outcome += ` — final feedback: "${fb}"`
+      }
+    } else {
+      outcome = `in progress, ${checks} check${checks !== 1 ? 's' : ''}`
+    }
+
+    const extras: string[] = []
+    if (hintCount > 0) extras.push(`${hintCount} hint${hintCount !== 1 ? 's' : ''} used`)
+    if (incorrectChecks > 0) extras.push(`${incorrectChecks} incorrect attempt${incorrectChecks !== 1 ? 's' : ''}`)
+
+    return `- "${problem}" — ${outcome}${extras.length ? ` (${extras.join(', ')})` : ''}`
+  })
+  return `Problems worked on (most recent first):\n${lines.join('\n')}`
+}
+
+/**
+ * Voice tutor chat. Receives the full UserMetadata so every personalisation field is
+ * automatically available — including any fields added in the future.
+ */
 export async function chatWithTutor(
   messages: TutorMessage[],
   context: {
-    userName?: string
-    solves: Array<{ problem: string; status: string; finalFeedback?: string }>
-    memory?: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }
-    /** Full metadata context string for personalisation (tone, style, weaknesses, etc.). */
-    userContext?: string
+    /** Full Firestore user metadata. All fields (ELO, preferences, weaknesses, etc.) are used. */
+    meta: UserMetadata | null
+    /** Full Solve objects from Firestore — base64 image fields are stripped internally. */
+    solves: Solve[]
   }
 ): Promise<string> {
   const client = getClient()
 
-  const name = context.userName ? `The student's name is ${context.userName}.` : ''
+  const metaSection = context.meta ? metadataToAgentContextString(context.meta) : ''
+  const solvesSection = buildSolveSummary(context.solves)
+  const studentName = context.meta?.name
 
-  const memorySections: string[] = []
-  if (context.userContext) memorySections.push(`Student profile: ${context.userContext}`)
-  if (context.memory) {
-    const { topicsCovered, weaknesses, solveSummaries } = context.memory
-    if (topicsCovered.length)
-      memorySections.push(`Topics the student has covered: ${topicsCovered.join(', ')}.`)
-    if (weaknesses.length)
-      memorySections.push(`Known areas of difficulty: ${weaknesses.join(', ')}.`)
-    if (solveSummaries.length) {
-      const recent = solveSummaries.slice(-5)
-      memorySections.push(`Recent problem summaries:\n${recent.map((s) => `- ${s}`).join('\n')}`)
-    }
-  }
-
-  const systemPrompt = `You are Epsilon-Delta, a warm and encouraging maths tutor having a voice conversation with a student. ${name}
-${memorySections.length ? '\n' + memorySections.join('\n') : ''}
+  const systemPrompt = `You are Epsilon-Delta, a warm and encouraging maths tutor having a voice conversation with a student.${studentName ? ` The student's name is ${studentName}.` : ''}
+${metaSection ? `\nStudent profile: ${metaSection}` : ''}${solvesSection ? `\n\n${solvesSection}` : ''}
 
 CRITICAL RULES for voice output:
 1. Respond in plain English only — no symbols, no LaTeX, no bullet points, no markdown.
