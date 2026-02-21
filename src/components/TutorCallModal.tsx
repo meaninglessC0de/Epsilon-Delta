@@ -21,6 +21,7 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
   const [hasSpeechAPI, setHasSpeechAPI] = useState(true)
 
   const phaseRef = useRef<Phase>('idle')
+  const memoryRef = useRef<AgentMemory | null>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const isMountedRef = useRef(true)
 
@@ -28,6 +29,9 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
     phaseRef.current = p
     setPhase(p)
   }, [])
+
+  // Keep memoryRef current so callbacks always read the latest value
+  useEffect(() => { memoryRef.current = memory }, [memory])
 
   const startListening = useCallback(() => {
     if (!isMountedRef.current) return
@@ -110,8 +114,8 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
           status: s.status,
           finalFeedback: s.finalFeedback,
         })),
-        memory: memory
-          ? { topicsCovered: memory.topicsCovered, weaknesses: memory.weaknesses, solveSummaries: memory.solveSummaries }
+        memory: memoryRef.current
+          ? { topicsCovered: memoryRef.current.topicsCovered, weaknesses: memoryRef.current.weaknesses, solveSummaries: memoryRef.current.solveSummaries }
           : undefined,
       })
 
