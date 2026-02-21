@@ -1431,6 +1431,98 @@ input {
   text-align: center;
 }
 
+/* ===== Manim page ===== */
+.manim-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 48px 24px 80px;
+}
+
+.manim-inner {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.manim-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.manim-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 4vw, 2.4rem);
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.manim-sub {
+  color: var(--text-2);
+  font-size: 0.95rem;
+  margin-top: 4px;
+}
+
+.manim-input-section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Loading */
+.manim-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+@keyframes manim-spin {
+  to { transform: rotate(360deg); }
+}
+
+.manim-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: manim-spin 0.9s linear infinite;
+}
+
+.manim-loading__step {
+  font-size: 1rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.manim-loading__hint {
+  font-size: 0.85rem;
+  color: var(--text-3);
+}
+
+/* Video result */
+.manim-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.manim-video {
+  width: 100%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  background: #000;
+  display: block;
+}
+
 /* ===== Excalidraw overrides ===== */
 /* Keep Excalidraw's own UI clean and integrated */
 .excalidraw .App-toolbar {

@@ -7,6 +7,7 @@ interface Props {
   user: User
   onNewProblem: () => void
   onResumeSolve: (id: string) => void
+  onGenerateVideo: () => void
 }
 
 function getGreeting(): string {
@@ -107,7 +108,7 @@ function SolveCard({
   )
 }
 
-export function DashboardPage({ user, onNewProblem, onResumeSolve }: Props) {
+export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVideo }: Props) {
   const [solves, setSolves] = useState<Solve[]>([])
   const [showCall, setShowCall] = useState(false)
 
@@ -154,6 +155,12 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve }: Props) {
             onClick={() => setShowCall(true)}
           >
             📞 Hop on a call
+          </button>
+          <button
+            className="btn btn--ghost btn--lg"
+            onClick={onGenerateVideo}
+          >
+            🎬 Video explanation
           </button>
         </div>
       </section>

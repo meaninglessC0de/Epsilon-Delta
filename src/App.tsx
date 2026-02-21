@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { DashboardPage } from './components/DashboardPage'
+import { ManimPage } from './components/ManimPage'
 import { NewProblemPage } from './components/NewProblemPage'
 import { WhiteboardPage } from './components/WhiteboardPage'
 import { AuthPage } from './components/AuthPage'
@@ -9,7 +10,7 @@ import type { Solve, User } from './types'
 import { saveSolve, getSolveById, initStorage } from './lib/storage'
 import { getStoredToken, clearToken, getMe } from './lib/auth'
 
-type Page = 'auth' | 'onboarding' | 'solve-list' | 'new-problem' | 'whiteboard'
+type Page = 'auth' | 'onboarding' | 'solve-list' | 'new-problem' | 'whiteboard' | 'manim'
 
 interface State {
   page: Page
@@ -66,6 +67,10 @@ export default function App() {
     setState({ page: 'new-problem' })
   }, [])
 
+  const goToManim = useCallback(() => {
+    setState({ page: 'manim' })
+  }, [])
+
   const startSolve = useCallback((problem: string, problemImage?: string) => {
     const solve: Solve = {
       id: crypto.randomUUID(),
@@ -98,7 +103,16 @@ export default function App() {
     return (
       <>
         <AppNavbar user={user} onLogout={handleLogout} onHome={goToSolveList} />
-        <DashboardPage user={user} onNewProblem={goToNewProblem} onResumeSolve={resumeSolve} />
+        <DashboardPage user={user} onNewProblem={goToNewProblem} onResumeSolve={resumeSolve} onGenerateVideo={goToManim} />
+      </>
+    )
+  }
+
+  if (state.page === 'manim') {
+    return (
+      <>
+        <AppNavbar user={user} onLogout={handleLogout} onHome={goToSolveList} />
+        <ManimPage onBack={goToSolveList} />
       </>
     )
   }

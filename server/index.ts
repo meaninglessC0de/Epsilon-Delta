@@ -5,6 +5,7 @@ import { initDb } from './db'
 import authRoutes from './routes/authRoutes'
 import profileRoutes from './routes/profileRoutes'
 import memoryRoutes from './routes/memoryRoutes'
+import manimRoutes from './routes/manimRoutes'
 
 const PORT = process.env.PORT ?? 3001
 
@@ -17,6 +18,7 @@ app.use(cookieParser())
 app.use('/api/auth', authRoutes)
 app.use('/api/profile', profileRoutes)
 app.use('/api/memory', memoryRoutes)
+app.use('/api/manim', manimRoutes)
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
