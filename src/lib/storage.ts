@@ -1,10 +1,15 @@
 import type { Solve } from '../types'
 
-const STORAGE_KEY = 'math_checker_solves_v1'
+const BASE_KEY = 'epsilon_delta_solves_v1'
+let storageKey = BASE_KEY
+
+export function initStorage(userId: number): void {
+  storageKey = `${BASE_KEY}_u${userId}`
+}
 
 export function getSolves(): Solve[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey)
     return raw ? (JSON.parse(raw) as Solve[]) : []
   } catch {
     return []
@@ -23,10 +28,10 @@ export function saveSolve(solve: Solve): void {
   } else {
     solves.unshift(solve)
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(solves))
+  localStorage.setItem(storageKey, JSON.stringify(solves))
 }
 
 export function deleteSolve(id: string): void {
   const solves = getSolves().filter((s) => s.id !== id)
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(solves))
+  localStorage.setItem(storageKey, JSON.stringify(solves))
 }

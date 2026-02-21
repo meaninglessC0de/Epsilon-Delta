@@ -1,21 +1,2 @@
-export interface FeedbackEntry {
-  id: string
-  timestamp: number
-  feedback: string
-  snapshot: string // base64 JPEG (no data: prefix)
-  isCorrect: boolean
-  hints: string[]
-  encouragement: string
-}
-
-export interface Solve {
-  id: string
-  problem: string
-  problemImage?: string // base64 JPEG (no data: prefix)
-  createdAt: number
-  completedAt?: number
-  finalWorking?: string // base64 JPEG (no data: prefix)
-  feedbackHistory: FeedbackEntry[]
-  finalFeedback?: string
-  status: 'active' | 'completed'
-}
+// Re-export shared types; keep legacy-compatible local shape for localStorage solves
+export type { FeedbackEntry, Solve, User, Profile, AgentMemory, AuthResponse, MeResponse } from '../shared/types'

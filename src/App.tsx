@@ -1,11 +1,15 @@
-import { useState, useCallback } from 'react'
-import { SolvePage } from './components/SolvePage'
+import { useState, useCallback, useEffect } from 'react'
+import { DashboardPage } from './components/DashboardPage'
 import { NewProblemPage } from './components/NewProblemPage'
 import { WhiteboardPage } from './components/WhiteboardPage'
-import type { Solve } from './types'
-import { saveSolve, getSolveById } from './lib/storage'
+import { AuthPage } from './components/AuthPage'
+import { AppNavbar } from './components/AppNavbar'
+import { OnboardingPage } from './components/OnboardingPage'
+import type { Solve, User } from './types'
+import { saveSolve, getSolveById, initStorage } from './lib/storage'
+import { getStoredToken, clearToken, getMe } from './lib/auth'
 
-type Page = 'solve-list' | 'new-problem' | 'whiteboard'
+type Page = 'auth' | 'onboarding' | 'solve-list' | 'new-problem' | 'whiteboard'
 
 interface State {
   page: Page
@@ -14,6 +18,45 @@ interface State {
 
 export default function App() {
   const [state, setState] = useState<State>({ page: 'solve-list' })
+  const [authChecked, setAuthChecked] = useState(false)
+  const [user, setUser] = useState<User | null>(null)
+
+  useEffect(() => {
+    const token = getStoredToken()
+    if (!token) {
+      setState({ page: 'auth' })
+      setAuthChecked(true)
+      return
+    }
+
+    getMe()
+      .then((data) => {
+        initStorage(data.user.id)
+        setUser(data.user)
+        setState({ page: data.onboardingComplete ? 'solve-list' : 'onboarding' })
+      })
+      .catch(() => {
+        clearToken()
+        setState({ page: 'auth' })
+      })
+      .finally(() => setAuthChecked(true))
+  }, [])
+
+  const handleAuthSuccess = useCallback((data: { user: User; onboardingComplete: boolean }) => {
+    initStorage(data.user.id)
+    setUser(data.user)
+    setState({ page: data.onboardingComplete ? 'solve-list' : 'onboarding' })
+  }, [])
+
+  const handleOnboardingComplete = useCallback(() => {
+    setState({ page: 'solve-list' })
+  }, [])
+
+  const handleLogout = useCallback(() => {
+    clearToken()
+    setUser(null)
+    setState({ page: 'auth' })
+  }, [])
 
   const goToSolveList = useCallback(() => {
     setState({ page: 'solve-list' })
@@ -41,12 +84,32 @@ export default function App() {
     if (solve) setState({ page: 'whiteboard', activeSolve: solve })
   }, [])
 
-  if (state.page === 'solve-list') {
-    return <SolvePage onNewProblem={goToNewProblem} onResumeSolve={resumeSolve} />
+  if (!authChecked) return null
+
+  if (state.page === 'auth') {
+    return <AuthPage onSuccess={handleAuthSuccess} />
+  }
+
+  if (state.page === 'onboarding' && user) {
+    return <OnboardingPage user={user} onComplete={handleOnboardingComplete} />
+  }
+
+  if (state.page === 'solve-list' && user) {
+    return (
+      <>
+        <AppNavbar user={user} onLogout={handleLogout} onHome={goToSolveList} />
+        <DashboardPage user={user} onNewProblem={goToNewProblem} onResumeSolve={resumeSolve} />
+      </>
+    )
   }
 
   if (state.page === 'new-problem') {
-    return <NewProblemPage onBack={goToSolveList} onContinue={startSolve} />
+    return (
+      <>
+        <AppNavbar user={user} onLogout={handleLogout} onHome={goToSolveList} />
+        <NewProblemPage onBack={goToSolveList} onContinue={startSolve} />
+      </>
+    )
   }
 
   if (state.page === 'whiteboard' && state.activeSolve) {

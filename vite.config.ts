@@ -3,6 +3,14 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+    },
+  },
   define: {
     // Excalidraw's CJS wrapper checks process.env at module load time
     'process.env.IS_PREACT': JSON.stringify('false'),

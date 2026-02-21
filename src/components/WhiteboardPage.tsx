@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw'
 import type { FeedbackEntry, Solve } from '../types'
 import { getSolveById, saveSolve } from '../lib/storage'
-import { checkWorking, getFinalFeedback } from '../lib/claude'
+import { checkWorking, getFinalFeedback, refreshMemory } from '../lib/claude'
+import { getMemory, updateMemory } from '../lib/memory'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
 
 const CHECK_INTERVAL = parseInt(import.meta.env.VITE_CHECK_INTERVAL ?? '45', 10)
@@ -182,12 +183,23 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
 
     onFinish() // navigate away immediately
 
-    // Background: get a proper final summary and silently update storage
+    // Background: get a proper final summary, update storage, then refresh agent memory
     if (base64) {
       getFinalFeedback(solve.problem, base64)
-        .then((finalFeedback) => {
+        .then(async (finalFeedback) => {
           const stored = getSolveById(solve.id)
           if (stored) { stored.finalFeedback = finalFeedback; saveSolve(stored) }
+
+          // Collect all hints from the session to inform memory update
+          const allHints = feedbackHistoryRef.current.flatMap((e) => e.hints)
+          const mem = await getMemory().catch(() => null)
+          if (mem) {
+            const updated = await refreshMemory(
+              { topicsCovered: mem.topicsCovered, weaknesses: mem.weaknesses, solveSummaries: mem.solveSummaries },
+              { problem: solve.problem, finalFeedback, hints: allHints },
+            )
+            await updateMemory(updated).catch(console.error)
+          }
         })
         .catch(console.error)
     }

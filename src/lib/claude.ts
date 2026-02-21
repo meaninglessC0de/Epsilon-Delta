@@ -75,6 +75,110 @@ CRITICAL RULES — failure to follow these will break the app:
   return parseCheckResult(extractText(response))
 }
 
+// After a solve completes, update the agent memory with new topics/weaknesses/summary
+export async function refreshMemory(
+  current: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] },
+  solve: { problem: string; finalFeedback: string; hints: string[] },
+): Promise<{ topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }> {
+  const client = getClient()
+
+  const prompt = `You are an AI analysing a student's maths work to update their learning profile.
+
+Problem: "${solve.problem}"
+Final feedback: "${solve.finalFeedback}"
+${solve.hints.length ? `Hints given during the session: ${solve.hints.slice(0, 5).join('; ')}` : ''}
+
+Current topics covered: ${JSON.stringify(current.topicsCovered)}
+Current weaknesses: ${JSON.stringify(current.weaknesses)}
+
+Produce a raw JSON object (no markdown, no code fences) with exactly these keys:
+{
+  "topicsCovered": [...],
+  "weaknesses": [...],
+  "solveSummary": "..."
+}
+
+Rules:
+- "topicsCovered": merge the existing list with 1–2 new topic tags for this problem (e.g. "integration by parts", "quadratic equations"). No duplicates. Max 20 total.
+- "weaknesses": update the existing list — add newly observed weaknesses, remove any that seem resolved. Keep to the 5 most relevant. Use short phrases.
+- "solveSummary": one sentence describing the problem and how the student did. Plain English, no symbols.`
+
+  const response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 300,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const raw = extractText(response)
+  const text = raw.replace(/^```[\w]*\s*/m, '').replace(/```\s*$/m, '').trim()
+
+  try {
+    const parsed = JSON.parse(text) as {
+      topicsCovered: string[]
+      weaknesses: string[]
+      solveSummary: string
+    }
+    const summaries = [...current.solveSummaries, parsed.solveSummary].slice(-20)
+    return {
+      topicsCovered: parsed.topicsCovered ?? current.topicsCovered,
+      weaknesses: parsed.weaknesses ?? current.weaknesses,
+      solveSummaries: summaries,
+    }
+  } catch {
+    console.warn('[claude] refreshMemory parse failed, returning current memory')
+    return current
+  }
+}
+
+// Voice tutor — fast conversational AI
+export interface TutorMessage { role: 'user' | 'assistant'; content: string }
+
+export async function chatWithTutor(
+  messages: TutorMessage[],
+  context: {
+    userName?: string
+    solves: Array<{ problem: string; status: string; finalFeedback?: string }>
+    memory?: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }
+  }
+): Promise<string> {
+  const client = getClient()
+
+  const name = context.userName ? `The student's name is ${context.userName}.` : ''
+
+  const memorySections: string[] = []
+  if (context.memory) {
+    const { topicsCovered, weaknesses, solveSummaries } = context.memory
+    if (topicsCovered.length)
+      memorySections.push(`Topics the student has covered: ${topicsCovered.join(', ')}.`)
+    if (weaknesses.length)
+      memorySections.push(`Known areas of difficulty: ${weaknesses.join(', ')}.`)
+    if (solveSummaries.length) {
+      const recent = solveSummaries.slice(-5)
+      memorySections.push(`Recent problem summaries:\n${recent.map((s) => `- ${s}`).join('\n')}`)
+    }
+  }
+
+  const systemPrompt = `You are Epsilon-Delta, a warm and encouraging maths tutor having a voice conversation with a student. ${name}
+${memorySections.length ? '\n' + memorySections.join('\n') : ''}
+
+CRITICAL RULES for voice output:
+1. Respond in plain English only — no symbols, no LaTeX, no bullet points, no markdown.
+2. Write all mathematics in words: "x squared plus three" not "x² + 3".
+3. Keep every response to 1 or 2 short sentences, under 35 words total. This is a voice call so brevity is essential.
+4. Be warm, encouraging, and conversational. Address the student by name if you know it.
+5. Never use asterisks, dashes as bullets, hash symbols, or any special characters.`
+
+  const response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 80,
+    system: systemPrompt,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+  })
+
+  const block = response.content.find((b) => b.type === 'text')
+  return block?.type === 'text' ? block.text : "I'm here to help — what would you like to work on?"
+}
+
 // Final feedback — slightly more detail, still concise
 export async function getFinalFeedback(
   problem: string,

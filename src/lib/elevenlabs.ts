@@ -57,7 +57,7 @@ function cleanForSpeech(text: string): string {
     .trim()
 }
 
-export async function speakText(rawText: string): Promise<void> {
+export async function speakText(rawText: string, onEnd?: () => void): Promise<void> {
   const apiKey = import.meta.env.VITE_ELEVENLABS_API_KEY as string | undefined
   if (!apiKey) {
     console.info('[ElevenLabs] VITE_ELEVENLABS_API_KEY not set — voice feedback disabled')
@@ -112,7 +112,10 @@ export async function speakText(rawText: string): Promise<void> {
 
     const audio = new Audio(url)
     currentAudio = audio
-    audio.addEventListener('ended', () => URL.revokeObjectURL(url))
+    audio.addEventListener('ended', () => {
+      URL.revokeObjectURL(url)
+      onEnd?.()
+    })
     await audio.play()
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return // expected on cancel
