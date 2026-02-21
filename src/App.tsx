@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { DashboardPage } from './components/DashboardPage'
+import { ManimPage } from './components/ManimPage'
 import { NewProblemPage } from './components/NewProblemPage'
 import { WhiteboardPage } from './components/WhiteboardPage'
 import { AuthPage } from './components/AuthPage'
@@ -51,13 +52,21 @@ function SolveScreen({ onFinish }: { onFinish: () => void }) {
   const { solveId } = useParams()
   const navigate = useNavigate()
   const [solve, setSolve] = useState<Solve | null>(null)
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
-    if (!solveId) return
+    if (!solveId) {
+      setLoaded(true)
+      return
+    }
     let cancelled = false
-    getSolveById(solveId).then((s) => {
-      if (!cancelled) setSolve(s ?? null)
-    })
+    getSolveById(solveId)
+      .then((s) => {
+        if (!cancelled) setSolve(s ?? null)
+      })
+      .finally(() => {
+        if (!cancelled) setLoaded(true)
+      })
     return () => { cancelled = true }
   }, [solveId])
 
@@ -66,7 +75,16 @@ function SolveScreen({ onFinish }: { onFinish: () => void }) {
     navigate('/', { replace: true })
   }, [navigate, onFinish])
 
-  if (!solveId || !solve) return <Navigate to="/" replace />
+  if (!solveId) return <Navigate to="/" replace />
+  if (!loaded) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'var(--bg)', flexDirection: 'column', gap: '12px' }}>
+        <div className="solve-loading-spinner" style={{ width: 32, height: 32, border: '3px solid var(--border)', borderTopColor: 'var(--primary)', borderRadius: '50%' }} />
+        <p style={{ color: 'var(--text-2)', fontSize: '0.95rem' }}>Opening whiteboard…</p>
+      </div>
+    )
+  }
+  if (!solve) return <Navigate to="/" replace />
   return <WhiteboardPage solve={solve} onFinish={goHome} />
 }
 
@@ -96,6 +114,7 @@ function AppRoutes() {
   const goHome = useCallback(() => navigate('/', { replace: true }), [navigate])
   const goNew = useCallback(() => navigate('/new', { replace: true }), [navigate])
   const goSolve = useCallback((id: string) => navigate(`/solve/${id}`, { replace: true }), [navigate])
+  const goManim = useCallback(() => navigate('/manim', { replace: true }), [navigate])
 
   const startSolve = useCallback(async (problem: string, problemImage?: string) => {
     const solve: Solve = {
@@ -139,7 +158,7 @@ function AppRoutes() {
         path="/"
         element={
           <AppShell user={user} onLogout={onLogout} onHome={goHome}>
-            <DashboardPage user={user} onNewProblem={goNew} onResumeSolve={goSolve} />
+            <DashboardPage user={user} onNewProblem={goNew} onResumeSolve={goSolve} onGenerateVideo={goManim} />
           </AppShell>
         }
       />
@@ -152,6 +171,14 @@ function AppRoutes() {
         }
       />
       <Route path="/solve/:solveId" element={<SolveScreen onFinish={goHome} />} />
+      <Route
+        path="/manim"
+        element={
+          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
+            <ManimPage onBack={goHome} />
+          </AppShell>
+        }
+      />
       <Route path="/login" element={<Navigate to="/" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -8,7 +8,10 @@ import { getMemory, updateMemory, getMetadataForAgent } from '../lib/memory'
 import { incrementSolveCount, updateTopicElo } from '../lib/firebaseMetadata'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
 
-const CHECK_INTERVAL = parseInt(import.meta.env.VITE_CHECK_INTERVAL ?? '45', 10)
+/** How often to analyze the whiteboard (seconds). Use VITE_ANALYZE_INTERVAL in .env to override. */
+const ANALYZE_INTERVAL = parseInt(import.meta.env.VITE_ANALYZE_INTERVAL ?? '20', 10)
+/** How long to show the error highlight overlay (ms) */
+const HIGHLIGHT_DURATION_MS = 6000
 
 interface Props {
   solve: Solve
@@ -32,15 +35,23 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   // performCheck can still be mid-execution (awaiting Claude) when the user
   // navigates away — isMountedRef lets us skip the TTS call in that case.
   const isMountedRef = useRef(true)
+  const handleFinishRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const canvasContainerRef = useRef<HTMLDivElement>(null)
 
   const [latestFeedback, setLatestFeedback] = useState<FeedbackEntry | null>(null)
   const [showToast, setShowToast] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const [isFinishing, setIsFinishing] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [sessionSeconds, setSessionSeconds] = useState(0)
-  const [nextCheckIn, setNextCheckIn] = useState(CHECK_INTERVAL)
+  const [nextCheckIn, setNextCheckIn] = useState(ANALYZE_INTERVAL)
   const [checkError, setCheckError] = useState<string | null>(null)
+  const [highlightRegion, setHighlightRegion] = useState<FeedbackEntry['highlightRegion']>(null)
+  const [commentLogOpen, setCommentLogOpen] = useState(true)
+  const [logEntries, setLogEntries] = useState<FeedbackEntry[]>(() =>
+    solve.feedbackHistory.filter((e) => !e.isCorrect),
+  )
 
   useEffect(() => { isMutedRef.current = isMuted }, [isMuted])
 
@@ -73,12 +84,17 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
 
   const captureCanvas = useCallback(async (): Promise<string | null> => {
     const api = excalidrawAPIRef.current
-    if (!api) return null
+    const container = canvasContainerRef.current
+    if (!api || !container) return null
     try {
+      const rect = container.getBoundingClientRect()
+      const w = Math.max(1, Math.round(rect.width))
+      const h = Math.max(1, Math.round(rect.height))
       const blob = await exportToBlob({
         elements: api.getSceneElements(),
         appState: { ...api.getAppState(), exportBackground: true, exportWithDarkMode: false },
         files: api.getFiles(),
+        getDimensions: () => ({ width: w, height: h }),
         mimeType: 'image/jpeg',
         quality: 0.8,
       })
@@ -116,15 +132,26 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         isCorrect: result.isCorrect,
         hints: result.hints,
         encouragement: result.encouragement,
+        speakSummary: result.speakSummary,
+        highlightRegion: result.highlightRegion,
       }
 
       feedbackHistoryRef.current = [...feedbackHistoryRef.current, entry]
+      if (!entry.isCorrect) setLogEntries((prev) => [...prev, entry])
       setLatestFeedback(entry)
       setShowToast(true)
 
       // Auto-dismiss toast after 12 seconds
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
       toastTimerRef.current = setTimeout(() => setShowToast(false), 12000)
+
+      // When wrong: show highlight on whiteboard, then clear after duration
+      if (!result.isCorrect && result.highlightRegion) {
+        setHighlightRegion(result.highlightRegion)
+        setTimeout(() => setHighlightRegion(null), HIGHLIGHT_DURATION_MS)
+      } else {
+        setHighlightRegion(null)
+      }
 
       // Persist
       const current = await getSolveById(solve.id)
@@ -133,9 +160,15 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         await saveSolve(current)
       }
 
-      // Only speak if still on this page — guards against post-unmount audio
-      if (isMountedRef.current && !isMutedRef.current) {
-        speakText(`${result.encouragement}. ${result.feedback}`).catch(console.error)
+      // Only speak when something is wrong — summarized version for ElevenLabs
+      if (isMountedRef.current && !isMutedRef.current && !result.isCorrect) {
+        const toSpeak = result.speakSummary || result.feedback
+        speakText(toSpeak).catch(console.error)
+      }
+
+      // Auto-complete and navigate when the answer is correct
+      if (result.isCorrect && isMountedRef.current) {
+        handleFinishRef.current()
       }
     } catch (err) {
       console.error('Check error:', err)
@@ -149,21 +182,37 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   // Countdown + periodic trigger.
   // Fire the API call PREFETCH_OFFSET seconds before the timer hits zero so that
   // the ~6-7s response arrives just as the counter resets — feedback appears at zero.
-  const PREFETCH_OFFSET = 7
+  const PREFETCH_OFFSET = Math.min(4, Math.floor(ANALYZE_INTERVAL / 2))
   useEffect(() => {
     const t = setInterval(() => {
       setNextCheckIn((n) => {
         if (n === PREFETCH_OFFSET) {
-          performCheck() // start early; response arrives ~when timer hits 0
+          performCheck()
         }
         if (n <= 1) {
-          return CHECK_INTERVAL // reset the visual counter
+          return ANALYZE_INTERVAL
         }
         return n - 1
       })
     }, 1000)
     return () => clearInterval(t)
   }, [performCheck])
+
+  const handleSave = useCallback(async () => {
+    if (isSaving) return
+    setIsSaving(true)
+    try {
+      const base64 = await captureCanvas()
+      const current = (await getSolveById(solve.id)) ?? solve
+      if (base64) current.finalWorking = base64
+      current.feedbackHistory = [...feedbackHistoryRef.current]
+      await saveSolve(current)
+    } catch (err) {
+      console.error('Save error:', err)
+    } finally {
+      setIsSaving(false)
+    }
+  }, [captureCanvas, isSaving, solve.id])
 
   const handleFinish = useCallback(async () => {
     if (isFinishing) return
@@ -215,8 +264,12 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     }
   }, [captureCanvas, isFinishing, onFinish, solve])
 
+  useEffect(() => {
+    handleFinishRef.current = handleFinish
+  }, [handleFinish])
+
   const circumference = 2 * Math.PI * 14
-  const dashOffset = circumference * (nextCheckIn / CHECK_INTERVAL)
+  const dashOffset = circumference * (nextCheckIn / ANALYZE_INTERVAL)
 
   return (
     <div className="whiteboard-page">
@@ -251,7 +304,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
             <span className="check-ring__label">{isChecking ? '…' : `${nextCheckIn}s`}</span>
           </button>
           <span className="wb-header__status">
-            {isChecking ? 'Checking…' : `Check in ${nextCheckIn}s`}
+            {isChecking ? 'Analyzing…' : `Next check in ${nextCheckIn}s`}
           </span>
         </div>
 
@@ -268,10 +321,18 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
 
           <button
             className="btn btn--primary btn--sm"
+            onClick={handleSave}
+            disabled={isSaving}
+          >
+            {isSaving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="btn btn--ghost btn--sm"
             onClick={handleFinish}
             disabled={isFinishing}
+            title="End session and go home"
           >
-            {isFinishing ? 'Saving…' : 'Finish ✓'}
+            End session
           </button>
         </div>
       </header>
@@ -284,12 +345,26 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       )}
 
       <div className="wb-body">
-        <div className="wb-canvas">
+        <div className="wb-canvas" ref={canvasContainerRef}>
           <Excalidraw
             excalidrawAPI={(api) => { excalidrawAPIRef.current = api }}
             initialData={{ appState: { viewBackgroundColor: '#ffffff', currentItemFontFamily: 1 } }}
             UIOptions={{ canvasActions: { saveToActiveFile: false, loadScene: false, export: false } }}
           />
+
+          {/* Error highlight overlay — shows region where AI detected a mistake */}
+          {highlightRegion && (
+            <div
+              className="wb-highlight"
+              style={{
+                left: `${highlightRegion.x * 100}%`,
+                top: `${highlightRegion.y * 100}%`,
+                width: `${highlightRegion.width * 100}%`,
+                height: `${highlightRegion.height * 100}%`,
+              }}
+              aria-hidden
+            />
+          )}
 
           {/* Feedback toast — overlaid on canvas */}
           {showToast && latestFeedback && (
@@ -314,6 +389,35 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
             </div>
           )}
         </div>
+
+        {/* Comment log — AI observations over time */}
+        <aside className={`wb-log ${commentLogOpen ? 'wb-log--open' : ''}`}>
+          <button
+            type="button"
+            className="wb-log__toggle"
+            onClick={() => setCommentLogOpen((o) => !o)}
+            aria-expanded={commentLogOpen}
+          >
+            📋 Comment log {logEntries.length > 0 && <span className="wb-log__count">{logEntries.length}</span>}
+          </button>
+          {commentLogOpen && (
+            <ul className="wb-log__list">
+              {logEntries.length === 0 ? (
+                <li className="wb-log__empty">Analysis runs every {ANALYZE_INTERVAL}s. Feedback appears here only when something needs fixing.</li>
+              ) : (
+                [...logEntries].reverse().map((entry) => (
+                  <li key={entry.id} className="wb-log__entry wb-log__entry--hint">
+                    <span className="wb-log__time">
+                      {formatTime(Math.max(0, Math.floor((entry.timestamp - solve.createdAt) / 1000)))}
+                    </span>
+                    <span className="wb-log__badge">💡</span>
+                    <p className="wb-log__text">{entry.feedback}</p>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </aside>
       </div>
     </div>
   )

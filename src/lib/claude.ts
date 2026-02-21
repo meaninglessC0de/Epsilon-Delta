@@ -6,11 +6,23 @@ function getClient() {
   return new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
 }
 
+/** Normalized 0–1 box on the image where the error is (for overlay highlight) */
+export interface HighlightRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface CheckResult {
   feedback: string
   isCorrect: boolean
   hints: string[]
   encouragement: string
+  /** When wrong: one short sentence for TTS (ElevenLabs) */
+  speakSummary?: string
+  /** When wrong: approximate region of the error (0–1) for whiteboard highlight */
+  highlightRegion?: HighlightRegion
 }
 
 function extractText(response: Anthropic.Message): string {
@@ -20,17 +32,32 @@ function extractText(response: Anthropic.Message): string {
 
 function parseCheckResult(raw: string): CheckResult {
   const fallback: CheckResult = { feedback: 'Looking good — keep going!', isCorrect: false, hints: [], encouragement: 'Keep it up!' }
+  const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 
   // Strip markdown code fences that Claude sometimes wraps JSON in
   const text = raw.replace(/^```[\w]*\s*/m, '').replace(/```\s*$/m, '').trim()
 
   // Attempt 1: the whole cleaned string is valid JSON
-  try { return JSON.parse(text) as CheckResult } catch { /* continue */ }
+  try {
+    const parsed = JSON.parse(text) as CheckResult
+    if (parsed.highlightRegion) {
+      const r = parsed.highlightRegion
+      parsed.highlightRegion = { x: clamp01(r.x), y: clamp01(r.y), width: clamp01(r.width), height: clamp01(r.height) }
+    }
+    return parsed
+  } catch { /* continue */ }
 
   // Attempt 2: extract the first {...} block (handles trailing prose)
   const match = text.match(/\{[\s\S]*\}/)
   if (match) {
-    try { return JSON.parse(match[0]) as CheckResult } catch { /* continue */ }
+    try {
+      const parsed = JSON.parse(match[0]) as CheckResult
+      if (parsed.highlightRegion) {
+        const r = parsed.highlightRegion
+        parsed.highlightRegion = { x: clamp01(r.x), y: clamp01(r.y), width: clamp01(r.width), height: clamp01(r.height) }
+      }
+      return parsed
+    } catch { /* continue */ }
   }
 
   console.warn('[claude] Could not parse feedback JSON. Raw response:', raw)
@@ -54,8 +81,10 @@ export async function checkWorking(
   const prompt = `You are a maths tutor reviewing a student's handwritten work.
 Problem: "${problem}"${previousFeedback ? `\nPrevious feedback: "${previousFeedback}"` : ''}${personalisation}
 
-Look at the image and reply with ONLY a raw JSON object — no markdown, no code fences, no explanation. Use exactly this shape:
-{"feedback":"1-2 specific sentences about what is correct and where any error is.","isCorrect":false,"hints":["one concrete next step if wrong, else leave array empty"],"encouragement":"Short upbeat phrase."}
+Look at the image and reply with ONLY a raw JSON object — no markdown, no code fences, no explanation. Use exactly this shape (all keys required; speakSummary and highlightRegion only when isCorrect is false):
+{"feedback":"1-2 specific sentences about what is correct and where any error is.","isCorrect":false,"hints":["one concrete next step if wrong, else leave array empty"],"encouragement":"Short upbeat phrase.","speakSummary":"When wrong only: one short sentence for voice, e.g. 'Check the sign on the second term.'","highlightRegion":{"x":0.1,"y":0.2,"width":0.4,"height":0.25}}
+
+highlightRegion: when isCorrect is false, give approximate region of the error as fractions of image size (0-1). x,y = top-left; width,height = size. If unsure use e.g. {"x":0,"y":0.3,"width":0.5,"height":0.3}. Omit highlightRegion entirely if isCorrect is true.
 
 CRITICAL RULES — failure to follow these will break the app:
 1. Return ONLY the raw JSON object. No extra text, no code fences, no markdown.

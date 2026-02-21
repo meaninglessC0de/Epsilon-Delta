@@ -1,6 +1,14 @@
 // Types shared between server and client
 import type { PreferenceScores } from './preferenceScoresSchema'
 
+/** Normalized 0–1 region on the canvas where the AI detected an error (for highlight overlay) */
+export interface HighlightRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface FeedbackEntry {
   id: string
   timestamp: number
@@ -9,6 +17,10 @@ export interface FeedbackEntry {
   isCorrect: boolean
   hints: string[]
   encouragement: string
+  /** Short phrase for TTS when wrong (ElevenLabs) */
+  speakSummary?: string
+  /** Where to show error highlight on the whiteboard (0–1 normalized) */
+  highlightRegion?: HighlightRegion
 }
 
 export interface Solve {
