@@ -116,14 +116,18 @@ function SolveCard({
 
 export function SolvePage({ onNewProblem, onResumeSolve }: Props) {
   const [solves, setSolves] = useState<Solve[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    setSolves(getSolves())
+    getSolves()
+      .then(setSolves)
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }, [])
 
-  function handleDelete(id: string) {
-    deleteSolve(id)
-    setSolves(getSolves())
+  async function handleDelete(id: string) {
+    await deleteSolve(id)
+    setSolves(await getSolves())
   }
 
   const completed = solves.filter((s) => s.status === 'completed')
@@ -151,7 +155,11 @@ export function SolvePage({ onNewProblem, onResumeSolve }: Props) {
 
       {/* Solve history */}
       <main className="solve-list-page__main">
-        {solves.length === 0 ? (
+        {loading ? (
+          <div className="empty-state">
+            <p className="empty-state__body">Loading…</p>
+          </div>
+        ) : solves.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state__icon">📐</div>
             <h2 className="empty-state__title">No solves yet</h2>

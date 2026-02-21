@@ -42,14 +42,17 @@ export async function checkWorking(
   problem: string,
   workingBase64: string,
   previousFeedback?: string,
+  userContext?: string,
 ): Promise<CheckResult> {
   const client = getClient()
 
+  const personalisation = userContext
+    ? `\nStudent context (use to tailor tone and depth): ${userContext}`
+    : ''
+
   // Giving Claude an exact example is the most reliable way to get back pure JSON.
-  // IMPORTANT: all text must be plain English — no maths symbols, no LaTeX, no notation.
-  // Write everything in words: "x squared" not "x²", "plus" not "+", "equals" not "=".
   const prompt = `You are a maths tutor reviewing a student's handwritten work.
-Problem: "${problem}"${previousFeedback ? `\nPrevious feedback: "${previousFeedback}"` : ''}
+Problem: "${problem}"${previousFeedback ? `\nPrevious feedback: "${previousFeedback}"` : ''}${personalisation}
 
 Look at the image and reply with ONLY a raw JSON object — no markdown, no code fences, no explanation. Use exactly this shape:
 {"feedback":"1-2 specific sentences about what is correct and where any error is.","isCorrect":false,"hints":["one concrete next step if wrong, else leave array empty"],"encouragement":"Short upbeat phrase."}
@@ -75,12 +78,15 @@ CRITICAL RULES — failure to follow these will break the app:
   return parseCheckResult(extractText(response))
 }
 
-// After a solve completes, update the agent memory with new topics/weaknesses/summary
+// After a solve completes, update the agent memory with new topics/weaknesses/summary. Returns primaryTopic for ELO.
 export async function refreshMemory(
   current: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] },
   solve: { problem: string; finalFeedback: string; hints: string[] },
-): Promise<{ topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }> {
+  userContext?: string,
+): Promise<{ topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[]; primaryTopic?: string }> {
   const client = getClient()
+
+  const personalisation = userContext ? `\nStudent context: ${userContext}` : ''
 
   const prompt = `You are an AI analysing a student's maths work to update their learning profile.
 
@@ -89,19 +95,21 @@ Final feedback: "${solve.finalFeedback}"
 ${solve.hints.length ? `Hints given during the session: ${solve.hints.slice(0, 5).join('; ')}` : ''}
 
 Current topics covered: ${JSON.stringify(current.topicsCovered)}
-Current weaknesses: ${JSON.stringify(current.weaknesses)}
+Current weaknesses: ${JSON.stringify(current.weaknesses)}${personalisation}
 
 Produce a raw JSON object (no markdown, no code fences) with exactly these keys:
 {
   "topicsCovered": [...],
   "weaknesses": [...],
-  "solveSummary": "..."
+  "solveSummary": "...",
+  "primaryTopic": "one of: algebra, linear_algebra, calculus, real_analysis, geometry, topology, probability, statistics, differential_equations, number_theory, discrete_math, optimization, complex_analysis, abstract_algebra, or general"
 }
 
 Rules:
-- "topicsCovered": merge the existing list with 1–2 new topic tags for this problem (e.g. "integration by parts", "quadratic equations"). No duplicates. Max 20 total.
-- "weaknesses": update the existing list — add newly observed weaknesses, remove any that seem resolved. Keep to the 5 most relevant. Use short phrases.
-- "solveSummary": one sentence describing the problem and how the student did. Plain English, no symbols.`
+- "topicsCovered": merge the existing list with 1–2 new topic tags for this problem. No duplicates. Max 20 total.
+- "weaknesses": update the existing list — add newly observed weaknesses, remove any that seem resolved. Keep to the 5 most relevant.
+- "solveSummary": one sentence describing the problem and how the student did. Plain English, no symbols.
+- "primaryTopic": the single best matching standardized topic for this problem (use snake_case).`
 
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -117,16 +125,18 @@ Rules:
       topicsCovered: string[]
       weaknesses: string[]
       solveSummary: string
+      primaryTopic?: string
     }
     const summaries = [...current.solveSummaries, parsed.solveSummary].slice(-20)
     return {
       topicsCovered: parsed.topicsCovered ?? current.topicsCovered,
       weaknesses: parsed.weaknesses ?? current.weaknesses,
       solveSummaries: summaries,
+      primaryTopic: parsed.primaryTopic ?? 'general',
     }
   } catch {
     console.warn('[claude] refreshMemory parse failed, returning current memory')
-    return current
+    return { ...current, primaryTopic: 'general' }
   }
 }
 
@@ -139,6 +149,8 @@ export async function chatWithTutor(
     userName?: string
     solves: Array<{ problem: string; status: string; finalFeedback?: string }>
     memory?: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }
+    /** Full metadata context string for personalisation (tone, style, weaknesses, etc.). */
+    userContext?: string
   }
 ): Promise<string> {
   const client = getClient()
@@ -146,6 +158,7 @@ export async function chatWithTutor(
   const name = context.userName ? `The student's name is ${context.userName}.` : ''
 
   const memorySections: string[] = []
+  if (context.userContext) memorySections.push(`Student profile: ${context.userContext}`)
   if (context.memory) {
     const { topicsCovered, weaknesses, solveSummaries } = context.memory
     if (topicsCovered.length)
@@ -183,8 +196,12 @@ CRITICAL RULES for voice output:
 export async function getFinalFeedback(
   problem: string,
   finalWorkingBase64: string,
+  userContext?: string,
 ): Promise<string> {
   const client = getClient()
+
+  const personalisation = userContext ? ` Student context: ${userContext}` : ''
+  const text = `Maths tutor. Problem: "${problem}". Give a final verdict in 2 sentences: did they get it right, and one piece of encouragement. Write everything in plain English words only — no mathematical symbols, no LaTeX, no notation of any kind.${personalisation}`
 
   const response = await client.messages.create({
     model: 'claude-opus-4-6',
@@ -194,10 +211,7 @@ export async function getFinalFeedback(
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: finalWorkingBase64 } },
-          {
-            type: 'text',
-            text: `Maths tutor. Problem: "${problem}". Give a final verdict in 2 sentences: did they get it right, and one piece of encouragement. Write everything in plain English words only — no mathematical symbols, no LaTeX, no notation of any kind.`,
-          },
+          { type: 'text', text },
         ],
       },
     ],

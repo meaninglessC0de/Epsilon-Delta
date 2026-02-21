@@ -32,6 +32,8 @@
 
   --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
   --font-body: 'Figtree', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  /* Whiteboard / chalk style (optional: add local font in public/fonts and override via @font-face) */
+  --font-whiteboard: 'Caveat', 'Comic Sans MS', cursive;
 
   --radius-sm: 8px;
   --radius: 12px;
@@ -96,6 +98,47 @@ input {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   border: 0;
+}
+
+/* ===== Onboarding ===== */
+.onboarding-layout .onboarding-content {
+  animation: onboardingFadeIn 0.4s ease-out;
+}
+
+.onboarding-card {
+  transition: box-shadow var(--transition), border-color var(--transition);
+}
+
+.onboarding-card:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.onboarding-layout .onboarding-progress-segment--filled {
+  animation: onboardingProgressFill 0.35s ease-out;
+}
+
+@keyframes onboardingFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes onboardingProgressFill {
+  from {
+    opacity: 0.6;
+    transform: scaleX(0.5);
+    transform-origin: left;
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+    transform-origin: left;
+  }
 }
 
 /* ===== Buttons ===== */

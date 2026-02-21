@@ -109,15 +109,19 @@ function SolveCard({
 
 export function DashboardPage({ user, onNewProblem, onResumeSolve }: Props) {
   const [solves, setSolves] = useState<Solve[]>([])
+  const [loading, setLoading] = useState(true)
   const [showCall, setShowCall] = useState(false)
 
   useEffect(() => {
-    setSolves(getSolves())
+    getSolves()
+      .then(setSolves)
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }, [])
 
-  function handleDelete(id: string) {
-    deleteSolve(id)
-    setSolves(getSolves())
+  async function handleDelete(id: string) {
+    await deleteSolve(id)
+    setSolves(await getSolves())
   }
 
   const displayName = user.name ?? user.email.split('@')[0]
@@ -160,7 +164,11 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve }: Props) {
 
       {/* Solve history */}
       <main className="solve-list-page__main">
-        {solves.length === 0 ? (
+        {loading ? (
+          <div className="empty-state">
+            <p className="empty-state__body">Loading…</p>
+          </div>
+        ) : solves.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state__icon">📐</div>
             <h2 className="empty-state__title">No solves yet</h2>

@@ -1,72 +1,103 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { DashboardPage } from './components/DashboardPage'
 import { NewProblemPage } from './components/NewProblemPage'
 import { WhiteboardPage } from './components/WhiteboardPage'
 import { AuthPage } from './components/AuthPage'
 import { AppNavbar } from './components/AppNavbar'
-import { OnboardingPage } from './components/OnboardingPage'
+import { OnboardingFlow } from './components/onboarding/OnboardingFlow'
 import type { Solve, User } from './types'
 import { saveSolve, getSolveById, initStorage } from './lib/storage'
-import { getStoredToken, clearToken, getMe } from './lib/auth'
+import { subscribeToAuth, clearToken } from './lib/auth'
 
-type Page = 'auth' | 'onboarding' | 'solve-list' | 'new-problem' | 'whiteboard'
+// --- Auth: always default to login. User is set only after explicit Sign in / Sign up (not from persisted session). ---
+type AuthState = { user: User | null; onboardingComplete: boolean }
 
-interface State {
-  page: Page
-  activeSolve?: Solve
-}
-
-export default function App() {
-  const [state, setState] = useState<State>({ page: 'solve-list' })
-  const [authChecked, setAuthChecked] = useState(false)
-  const [user, setUser] = useState<User | null>(null)
+function useAuth(): AuthState & { setAuth: (s: AuthState) => void } {
+  const [state, setState] = useState<AuthState>({ user: null, onboardingComplete: false })
 
   useEffect(() => {
-    const token = getStoredToken()
-    if (!token) {
-      setState({ page: 'auth' })
-      setAuthChecked(true)
-      return
-    }
-
-    getMe()
-      .then((data) => {
-        initStorage(data.user.id)
-        setUser(data.user)
-        setState({ page: data.onboardingComplete ? 'solve-list' : 'onboarding' })
-      })
-      .catch(() => {
-        clearToken()
-        setState({ page: 'auth' })
-      })
-      .finally(() => setAuthChecked(true))
+    const unsub = subscribeToAuth((fbUser, _onboardingComplete) => {
+      // Only clear state when Firebase says logged out (e.g. logout in another tab). Never set user from Firebase on load.
+      if (!fbUser) setState({ user: null, onboardingComplete: false })
+    })
+    return unsub
   }, [])
 
-  const handleAuthSuccess = useCallback((data: { user: User; onboardingComplete: boolean }) => {
+  return { ...state, setAuth: setState }
+}
+
+// --- Screens (no loading screen for auth). ---
+function AppShell({
+  user,
+  onLogout,
+  onHome,
+  children,
+}: {
+  user: User
+  onLogout: () => void
+  onHome: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <>
+      <AppNavbar user={user} onLogout={onLogout} onHome={onHome} />
+      {children}
+    </>
+  )
+}
+
+function SolveScreen({ onFinish }: { onFinish: () => void }) {
+  const { solveId } = useParams()
+  const navigate = useNavigate()
+  const [solve, setSolve] = useState<Solve | null>(null)
+
+  useEffect(() => {
+    if (!solveId) return
+    let cancelled = false
+    getSolveById(solveId).then((s) => {
+      if (!cancelled) setSolve(s ?? null)
+    })
+    return () => { cancelled = true }
+  }, [solveId])
+
+  const goHome = useCallback(() => {
+    onFinish()
+    navigate('/', { replace: true })
+  }, [navigate, onFinish])
+
+  if (!solveId || !solve) return <Navigate to="/" replace />
+  return <WhiteboardPage solve={solve} onFinish={goHome} />
+}
+
+// --- Router: one place that reads auth and renders the right screen. ---
+function AppRoutes() {
+  const { user, onboardingComplete, setAuth } = useAuth()
+  const navigate = useNavigate()
+
+  const onAuthSuccess = useCallback((data: { user: User; onboardingComplete: boolean }) => {
     initStorage(data.user.id)
-    setUser(data.user)
-    setState({ page: data.onboardingComplete ? 'solve-list' : 'onboarding' })
-  }, [])
+    setAuth({ user: data.user, onboardingComplete: data.onboardingComplete })
+    if (data.onboardingComplete) navigate('/', { replace: true })
+    else navigate('/onboarding', { replace: true })
+  }, [navigate, setAuth])
 
-  const handleOnboardingComplete = useCallback(() => {
-    setState({ page: 'solve-list' })
-  }, [])
+  const onOnboardingComplete = useCallback(() => {
+    if (user) setAuth({ user, onboardingComplete: true })
+    navigate('/', { replace: true })
+  }, [navigate, setAuth, user])
 
-  const handleLogout = useCallback(() => {
+  const onLogout = useCallback(() => {
     clearToken()
-    setUser(null)
-    setState({ page: 'auth' })
-  }, [])
+    setAuth({ user: null, onboardingComplete: false })
+    navigate('/login', { replace: true })
+  }, [navigate, setAuth])
 
-  const goToSolveList = useCallback(() => {
-    setState({ page: 'solve-list' })
-  }, [])
+  const goHome = useCallback(() => navigate('/', { replace: true }), [navigate])
+  const goNew = useCallback(() => navigate('/new', { replace: true }), [navigate])
+  const goSolve = useCallback((id: string) => navigate(`/solve/${id}`, { replace: true }), [navigate])
 
-  const goToNewProblem = useCallback(() => {
-    setState({ page: 'new-problem' })
-  }, [])
-
-  const startSolve = useCallback((problem: string, problemImage?: string) => {
+  const startSolve = useCallback(async (problem: string, problemImage?: string) => {
     const solve: Solve = {
       id: crypto.randomUUID(),
       problem,
@@ -75,46 +106,62 @@ export default function App() {
       feedbackHistory: [],
       status: 'active',
     }
-    saveSolve(solve)
-    setState({ page: 'whiteboard', activeSolve: solve })
-  }, [])
+    await saveSolve(solve)
+    navigate(`/solve/${solve.id}`, { replace: true })
+  }, [navigate])
 
-  const resumeSolve = useCallback((solveId: string) => {
-    const solve = getSolveById(solveId)
-    if (solve) setState({ page: 'whiteboard', activeSolve: solve })
-  }, [])
-
-  if (!authChecked) return null
-
-  if (state.page === 'auth') {
-    return <AuthPage onSuccess={handleAuthSuccess} />
-  }
-
-  if (state.page === 'onboarding' && user) {
-    return <OnboardingPage user={user} onComplete={handleOnboardingComplete} />
-  }
-
-  if (state.page === 'solve-list' && user) {
+  // Not logged in → show login (any route)
+  if (!user) {
     return (
-      <>
-        <AppNavbar user={user} onLogout={handleLogout} onHome={goToSolveList} />
-        <DashboardPage user={user} onNewProblem={goToNewProblem} onResumeSolve={resumeSolve} />
-      </>
+      <Routes>
+        <Route path="/login" element={<AuthPage onSuccess={onAuthSuccess} />} />
+        <Route path="/signup" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
     )
   }
 
-  if (state.page === 'new-problem') {
+  // Logged in, onboarding not done → onboarding only
+  if (!onboardingComplete) {
     return (
-      <>
-        <AppNavbar user={user} onLogout={handleLogout} onHome={goToSolveList} />
-        <NewProblemPage onBack={goToSolveList} onContinue={startSolve} />
-      </>
+      <Routes>
+        <Route path="/onboarding" element={<OnboardingFlow user={user} onComplete={onOnboardingComplete} />} />
+        <Route path="/onboarding/:stepIndex" element={<OnboardingFlow user={user} onComplete={onOnboardingComplete} />} />
+        <Route path="*" element={<Navigate to="/onboarding" replace />} />
+      </Routes>
     )
   }
 
-  if (state.page === 'whiteboard' && state.activeSolve) {
-    return <WhiteboardPage solve={state.activeSolve} onFinish={goToSolveList} />
-  }
+  // Logged in, onboarding done → app
+  return (
+    <Routes>
+      <Route
+        path="/"
+        element={
+          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
+            <DashboardPage user={user} onNewProblem={goNew} onResumeSolve={goSolve} />
+          </AppShell>
+        }
+      />
+      <Route
+        path="/new"
+        element={
+          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
+            <NewProblemPage onBack={goHome} onContinue={startSolve} />
+          </AppShell>
+        }
+      />
+      <Route path="/solve/:solveId" element={<SolveScreen onFinish={goHome} />} />
+      <Route path="/login" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
 
-  return null
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
+  )
 }

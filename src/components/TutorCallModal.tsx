@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { chatWithTutor, type TutorMessage } from '../lib/claude'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
-import { getMemory } from '../lib/memory'
+import { getMemory, getMetadataForAgent } from '../lib/memory'
 import type { User, Solve, AgentMemory } from '../types'
 
 type Phase = 'idle' | 'listening' | 'processing' | 'speaking'
@@ -22,6 +22,7 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
 
   const phaseRef = useRef<Phase>('idle')
   const memoryRef = useRef<AgentMemory | null>(null)
+  const userContextRef = useRef<string>('')
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const isMountedRef = useRef(true)
 
@@ -30,7 +31,6 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
     setPhase(p)
   }, [])
 
-  // Keep memoryRef current so callbacks always read the latest value
   useEffect(() => { memoryRef.current = memory }, [memory])
 
   const startListening = useCallback(() => {
@@ -117,6 +117,7 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
         memory: memoryRef.current
           ? { topicsCovered: memoryRef.current.topicsCovered, weaknesses: memoryRef.current.weaknesses, solveSummaries: memoryRef.current.solveSummaries }
           : undefined,
+        userContext: userContextRef.current || undefined,
       })
 
       if (!isMountedRef.current) return
@@ -141,10 +142,11 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
     }
   }, [user, solves, startListening]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Kick off with greeting on mount + fetch memory in parallel
+  // Kick off with greeting on mount + fetch memory and metadata context
   useEffect(() => {
     isMountedRef.current = true
     getMemory().then((m) => { if (isMountedRef.current) setMemory(m) }).catch(() => {})
+    getMetadataForAgent().then((a) => { if (isMountedRef.current && a) userContextRef.current = a.contextString }).catch(() => {})
 
     const greeting: TutorMessage = {
       role: 'assistant',

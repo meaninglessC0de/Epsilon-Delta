@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw'
 import type { FeedbackEntry, Solve } from '../types'
+import { auth } from '../lib/firebase'
 import { getSolveById, saveSolve } from '../lib/storage'
 import { checkWorking, getFinalFeedback, refreshMemory } from '../lib/claude'
-import { getMemory, updateMemory } from '../lib/memory'
+import { getMemory, updateMemory, getMetadataForAgent } from '../lib/memory'
+import { incrementSolveCount, updateTopicElo } from '../lib/firebaseMetadata'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
 
 const CHECK_INTERVAL = parseInt(import.meta.env.VITE_CHECK_INTERVAL ?? '45', 10)
@@ -103,7 +105,8 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       if (!base64) return
 
       const lastFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]?.feedback
-      const result = await checkWorking(solve.problem, base64, lastFeedback)
+      const agentMeta = await getMetadataForAgent()
+      const result = await checkWorking(solve.problem, base64, lastFeedback, agentMeta?.contextString)
 
       const entry: FeedbackEntry = {
         id: crypto.randomUUID(),
@@ -124,10 +127,10 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       toastTimerRef.current = setTimeout(() => setShowToast(false), 12000)
 
       // Persist
-      const current = getSolveById(solve.id)
+      const current = await getSolveById(solve.id)
       if (current) {
         current.feedbackHistory.push(entry)
-        saveSolve(current)
+        await saveSolve(current)
       }
 
       // Only speak if still on this page — guards against post-unmount audio
@@ -174,32 +177,39 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     const base64 = await captureCanvas()
     const lastFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]
 
-    const current = getSolveById(solve.id) ?? solve
+    const current = (await getSolveById(solve.id)) ?? solve
     current.completedAt = Date.now()
     current.status = 'completed'
     if (base64) current.finalWorking = base64
     current.finalFeedback = lastFeedback?.feedback ?? 'Session completed.'
-    saveSolve(current)
+    await saveSolve(current)
 
     onFinish() // navigate away immediately
 
-    // Background: get a proper final summary, update storage, then refresh agent memory
-    if (base64) {
-      getFinalFeedback(solve.problem, base64)
+    // Background: final feedback, refresh memory, update ELO and solve count
+    const lastEntry = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]
+    const uid = auth.currentUser?.uid
+    if (base64 && uid) {
+      const agentMeta = await getMetadataForAgent()
+      getFinalFeedback(solve.problem, base64, agentMeta?.contextString)
         .then(async (finalFeedback) => {
-          const stored = getSolveById(solve.id)
-          if (stored) { stored.finalFeedback = finalFeedback; saveSolve(stored) }
+          const stored = await getSolveById(solve.id)
+          if (stored) { stored.finalFeedback = finalFeedback; await saveSolve(stored) }
 
-          // Collect all hints from the session to inform memory update
           const allHints = feedbackHistoryRef.current.flatMap((e) => e.hints)
           const mem = await getMemory().catch(() => null)
           if (mem) {
             const updated = await refreshMemory(
               { topicsCovered: mem.topicsCovered, weaknesses: mem.weaknesses, solveSummaries: mem.solveSummaries },
               { problem: solve.problem, finalFeedback, hints: allHints },
+              agentMeta?.contextString,
             )
             await updateMemory(updated).catch(console.error)
+            const topic = updated.primaryTopic ?? 'general'
+            const isCorrect = lastEntry?.isCorrect ?? false
+            await updateTopicElo(uid, topic, isCorrect).catch(console.error)
           }
+          await incrementSolveCount(uid).catch(console.error)
         })
         .catch(console.error)
     }

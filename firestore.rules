@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Centralized user metadata: only the owning user can read/write
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    // Solves subcollection under users
+    match /users/{userId}/solves/{solveId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    // Migration pending (keyed by normalized email). Only migration script (Admin) writes.
+    // Authenticated users can read; the app only requests the doc for their own email.
+    match /migration_pending/{email} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+  }
+}
