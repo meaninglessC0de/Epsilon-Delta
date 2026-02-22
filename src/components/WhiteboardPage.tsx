@@ -8,6 +8,7 @@ import { checkWorking, getFinalFeedback, refreshMemory } from '../lib/claude'
 import { getMemory, updateMemory, getMetadataForAgent } from '../lib/memory'
 import { incrementSolveCount, updateTopicElo, recordUserInput } from '../lib/firebaseMetadata'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
+import { getMathematicianForUser } from '../lib/mathematician'
 import { useDevelopmentProgress } from '../lib/developmentProgressToast'
 
 /** How often to analyze the whiteboard (seconds). Use VITE_ANALYZE_INTERVAL in .env to override. */
@@ -48,6 +49,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   const isMountedRef = useRef(true)
   const handleFinishRef = useRef<() => Promise<void>>(() => Promise.resolve())
   const canvasContainerRef = useRef<HTMLDivElement>(null)
+  const performCheckRef = useRef<(force?: boolean) => Promise<void>>(() => Promise.resolve())
 
   const [latestFeedback, setLatestFeedback] = useState<FeedbackEntry | null>(null)
   const [showToast, setShowToast] = useState(false)
@@ -252,11 +254,11 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       current.feedbackHistory = [...feedbackHistoryRef.current]
       await saveSolve(current)
 
+      const uid = auth.currentUser?.uid ?? ''
       if (isMountedRef.current && !isMutedRef.current && result.speakSummary) {
-        speakText(result.speakSummary).catch(console.error)
+        speakText(result.speakSummary, { mathematicianName: getMathematicianForUser(uid) }).catch(console.error)
       }
 
-      const uid = auth.currentUser?.uid
       if (uid) {
         recordUserInput(uid, 'whiteboard', solve.problem).catch(console.error)
         showProgress('Learning from your progress')
@@ -277,17 +279,21 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     }
   }, [captureCanvas, solve.id, solve.problem, showProgress])
 
-  // Periodic check every ANALYZE_INTERVAL seconds. Always run (force=true) so we check regardless of signature.
-  // If a check is already in progress when the interval fires, we set pendingCheckRef so it runs as soon as the current one finishes.
   useEffect(() => {
-    const runCheck = () => performCheck(true)
+    performCheckRef.current = performCheck
+  }, [performCheck])
+
+  // Periodic check every ANALYZE_INTERVAL seconds. Use a ref so this effect runs once and the timer is never reset by performCheck identity changing.
+  // If a check is already in progress when the interval fires, pendingCheckRef triggers a follow-up run when the current one finishes.
+  useEffect(() => {
+    const runCheck = () => performCheckRef.current(true)
     const initial = setTimeout(runCheck, 8000)
     const t = setInterval(runCheck, ANALYZE_INTERVAL * 1000)
     return () => {
       clearTimeout(initial)
       clearInterval(t)
     }
-  }, [performCheck])
+  }, [])
 
   // Save: run a check first. If correct, mark completed and finish; if incorrect, set status and save; else persist as active.
   const handleSave = useCallback(async () => {
@@ -334,7 +340,8 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         setLatestFeedback(entry)
         setShowToast(true)
         if (isMountedRef.current && !isMutedRef.current && result.speakSummary) {
-          speakText(result.speakSummary).catch(console.error)
+          const uid = auth.currentUser?.uid ?? ''
+          speakText(result.speakSummary, { mathematicianName: getMathematicianForUser(uid) }).catch(console.error)
         }
       }
 

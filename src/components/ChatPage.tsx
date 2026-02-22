@@ -202,12 +202,15 @@ export function ChatPage({ user, onBack }: Props) {
 
           stopMic()
           setPhaseSync('ai_speaking')
-          speakText(evalRes.speak, () => {
-            if (!isMountedRef.current) return
-            if (phaseRef.current === 'ai_speaking') {
-              setPhaseSync('user_listening')
-              startListening()
-            }
+          speakText(evalRes.speak, {
+            mathematicianName: mathematician,
+            onEnd: () => {
+              if (!isMountedRef.current) return
+              if (phaseRef.current === 'ai_speaking') {
+                setPhaseSync('user_listening')
+                startListening()
+              }
+            },
           }).catch(() => {
             if (isMountedRef.current && phaseRef.current === 'ai_speaking') {
               setPhaseSync('user_listening')
@@ -240,7 +243,7 @@ export function ChatPage({ user, onBack }: Props) {
               startListening()
             }
           }
-          speakText(res.speak, onSpeakDone).catch(() => {
+          speakText(res.speak, { mathematicianName: mathematician, onEnd: onSpeakDone }).catch(() => {
             if (!isMountedRef.current) return
             if (res.openVideo) {
               navigate('/manim', { state: { fromChat: true, suggestedQuestion: res.openVideo } })
@@ -271,9 +274,12 @@ export function ChatPage({ user, onBack }: Props) {
       setMessages((prev) => [...prev, { role: 'assistant', content: question, isQuestion: true }])
       stopMic()
       setPhaseSync('ai_speaking')
-      speakText(question, () => {
-        if (!isMountedRef.current) return
-        if (phaseRef.current === 'ai_speaking') setPhaseSync('awaiting_answer')
+      speakText(question, {
+        mathematicianName: mathematician,
+        onEnd: () => {
+          if (!isMountedRef.current) return
+          if (phaseRef.current === 'ai_speaking') setPhaseSync('awaiting_answer')
+        },
       }).catch(() => {
         if (isMountedRef.current && phaseRef.current === 'ai_speaking') setPhaseSync('awaiting_answer')
       })
@@ -338,12 +344,15 @@ export function ChatPage({ user, onBack }: Props) {
     stopMic()
     setPhaseSync('ai_speaking')
 
-    speakText(greetingContent, () => {
-      if (!isMountedRef.current) return
-      if (phaseRef.current === 'ai_speaking') {
-        setPhaseSync('user_listening')
-        startListening()
-      }
+    speakText(greetingContent, {
+      mathematicianName: mathematician,
+      onEnd: () => {
+        if (!isMountedRef.current) return
+        if (phaseRef.current === 'ai_speaking') {
+          setPhaseSync('user_listening')
+          startListening()
+        }
+      },
     }).catch(() => {
       if (isMountedRef.current && phaseRef.current === 'ai_speaking') {
         setPhaseSync('user_listening')

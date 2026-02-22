@@ -17,7 +17,7 @@ interface ProfileRow {
 
 function rowToProfile(row: ProfileRow): Profile {
   return {
-    userId: row.user_id,
+    userId: String(row.user_id),
     university: row.university ?? undefined,
     studyLevel: row.study_level ?? undefined,
     courses: JSON.parse(row.courses) as string[],

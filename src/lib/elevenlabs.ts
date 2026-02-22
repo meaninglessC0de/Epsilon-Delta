@@ -1,5 +1,9 @@
-// Aria — modern, expressive voice
-const DEFAULT_VOICE_ID = '9BWtsMINqrJLrRacOk9x'
+import { getMathematicianMetadata } from './mathematicianMetadata'
+
+// Default voices by gender (ElevenLabs premade: Aria = female, Adam = male)
+const VOICE_ID_FEMALE = '9BWtsMINqrJLrRacOk9x'   // Aria
+const VOICE_ID_MALE = 'pNInz6obpgDQGcFmaJgB'   // Adam
+const DEFAULT_VOICE_ID = VOICE_ID_FEMALE
 
 let currentAudio: HTMLAudioElement | null = null
 let currentController: AbortController | null = null
@@ -57,7 +61,20 @@ function cleanForSpeech(text: string): string {
     .trim()
 }
 
-export async function speakText(rawText: string, onEnd?: () => void): Promise<void> {
+export interface SpeakTextOptions {
+  onEnd?: () => void
+  /** Mathematician display name (e.g. from getMathematicianForUser). Picks voice by gender and applies mannerism-based settings. */
+  mathematicianName?: string
+}
+
+export async function speakText(
+  rawText: string,
+  optionsOrOnEnd?: SpeakTextOptions | (() => void)
+): Promise<void> {
+  const options: SpeakTextOptions =
+    typeof optionsOrOnEnd === 'function' ? { onEnd: optionsOrOnEnd } : optionsOrOnEnd ?? {}
+  const { onEnd, mathematicianName } = options
+
   const apiKey = import.meta.env.VITE_ELEVENLABS_API_KEY as string | undefined
   if (!apiKey) {
     console.info('[ElevenLabs] VITE_ELEVENLABS_API_KEY not set — voice feedback disabled')
@@ -66,15 +83,25 @@ export async function speakText(rawText: string, onEnd?: () => void): Promise<vo
   }
 
   // Cancel any in-flight request + stop any playing audio BEFORE starting a new one.
-  // This must happen before the fetch so the AbortController from a previous call
-  // doesn't race with the new audio object we're about to create.
   stopSpeaking()
 
   const controller = new AbortController()
   currentController = controller
 
-  const voiceId =
-    (import.meta.env.VITE_ELEVENLABS_VOICE_ID as string | undefined) ?? DEFAULT_VOICE_ID
+  let voiceId: string
+  let stability: number
+  let style: number
+  if (mathematicianName?.trim()) {
+    const meta = getMathematicianMetadata(mathematicianName.trim())
+    voiceId = meta.gender === 'female' ? VOICE_ID_FEMALE : VOICE_ID_MALE
+    stability = meta.voiceStability ?? 0.28
+    style = meta.voiceStyle ?? 0.35
+  } else {
+    voiceId =
+      (import.meta.env.VITE_ELEVENLABS_VOICE_ID as string | undefined) ?? DEFAULT_VOICE_ID
+    stability = 0.28
+    style = 0.35
+  }
 
   const text = cleanForSpeech(rawText).slice(0, 300)
 
@@ -87,9 +114,9 @@ export async function speakText(rawText: string, onEnd?: () => void): Promise<vo
         text,
         model_id: 'eleven_turbo_v2_5',
         voice_settings: {
-          stability: 0.28,         // lower = more expressive, varied delivery
+          stability,
           similarity_boost: 0.82,
-          style: 0.35,             // adds natural style variation
+          style,
           use_speaker_boost: true,
         },
       }),

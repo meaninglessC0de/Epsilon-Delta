@@ -1,5 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { getUserMetadata } from '../lib/firebaseMetadata'
+import { getRandomPromptForTopic } from '../lib/topicPrompts'
 import { MATH_TOPICS, DEFAULT_ELO } from '../../shared/metadataSchema'
 import type { User } from '../types'
 
@@ -12,8 +14,17 @@ interface Props {
 }
 
 export function TopicSidebar({ user }: Props) {
+  const navigate = useNavigate()
   const [topicElo, setTopicElo] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
+
+  const handleExploreTopic = useCallback(
+    (topic: string) => {
+      const question = getRandomPromptForTopic(topic)
+      navigate('/manim', { state: { suggestedQuestion: question, autoGenerate: true } })
+    },
+    [navigate]
+  )
 
   useEffect(() => {
     getUserMetadata(user.id)
@@ -62,15 +73,18 @@ export function TopicSidebar({ user }: Props) {
       {explore.length > 0 && (
         <section className="topic-sidebar__section">
           <h4 className="topic-sidebar__label topic-sidebar__label--explore">Explore</h4>
+          <p className="topic-sidebar__explore-hint">Click for a video in this topic</p>
           <div className="topic-sidebar__tags">
-            {explore.slice(0, 6).map((t) => (
-              <span key={t} className="topic-tag topic-tag--explore">
+            {explore.map((t) => (
+              <button
+                key={t}
+                type="button"
+                className="topic-tag topic-tag--explore topic-tag--clickable"
+                onClick={() => handleExploreTopic(t)}
+              >
                 {formatTopic(t)}
-              </span>
+              </button>
             ))}
-            {explore.length > 6 && (
-              <span className="topic-sidebar__more">+{explore.length - 6} more</span>
-            )}
           </div>
         </section>
       )}

@@ -18,7 +18,7 @@ interface ProfileRow {
 }
 
 function rowToUser(row: UserRow): User {
-  return { id: row.id, email: row.email, name: row.name ?? undefined, createdAt: row.created_at }
+  return { id: String(row.id), email: row.email, name: row.name ?? undefined, createdAt: row.created_at }
 }
 
 // POST /api/auth/register

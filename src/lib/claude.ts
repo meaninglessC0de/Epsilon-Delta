@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { UserMetadata, Solve } from '../../shared/types'
 import { metadataToAgentContextString } from './firebaseMetadata'
+import { getMathematicianMetadata } from './mathematicianMetadata'
 
 function getClient() {
   const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined
@@ -289,6 +290,8 @@ export type TutorContext = {
   userContext?: string
   /** Summarised recent conversations for continuity across sessions */
   previousConversationContext?: string
+  /** Optional full metadata (e.g. for voice call modal); buildTutorContext uses userName, userContext, etc. */
+  meta?: unknown
 }
 
 function buildTutorContext(context: TutorContext) {
@@ -313,12 +316,16 @@ function buildTutorContext(context: TutorContext) {
 
 export async function chatWithTutor(
   messages: TutorMessage[],
-  context: TutorContext
+  context: TutorContext & { mathematicianName?: string }
 ): Promise<string> {
   const client = getClient()
   const { name, memorySections } = buildTutorContext(context)
 
-  const systemPrompt = `You are Epsilon-Delta, a warm and encouraging maths tutor having a voice conversation with a student. ${name}
+  const tutorName = context.mathematicianName ?? 'Epsilon-Delta'
+  const mannerismLine = context.mathematicianName
+    ? `\n${getMathematicianMetadata(context.mathematicianName).speakingStyle}\n`
+    : ''
+  const systemPrompt = `You are ${tutorName}, a warm and encouraging maths tutor having a voice conversation with a student. ${name}${mannerismLine}
 ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
 
 CRITICAL RULES for voice output:
@@ -346,7 +353,10 @@ export async function chatWithTutorStructured(
   const client = getClient()
   const { name, memorySections } = buildTutorContext(context)
   const tutorName = context.mathematicianName ?? 'Epsilon-Delta'
-  const systemPrompt = `You are ${tutorName}, a warm maths tutor in a voice conversation. The student hears you (TTS) and sees a short on-screen summary. ${name}
+  const mannerismLine = context.mathematicianName
+    ? `\n${getMathematicianMetadata(context.mathematicianName).speakingStyle}\n`
+    : ''
+  const systemPrompt = `You are ${tutorName}, a warm maths tutor in a voice conversation. The student hears you (TTS) and sees a short on-screen summary. ${name}${mannerismLine}
 ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
 
 Reply with a JSON object only: {"content":"...","speak":"...","isQuestion":false,"equation":"optional","graph":"optional","openVideo":"optional"}
@@ -400,7 +410,10 @@ export async function tutorAskQuestion(
   const client = getClient()
   const { name, memorySections } = buildTutorContext(context)
   const tutorName = context.mathematicianName ?? 'Epsilon-Delta'
-  const systemPrompt = `You are ${tutorName}, a maths tutor. ${name}
+  const mannerismLine = context.mathematicianName
+    ? `\n${getMathematicianMetadata(context.mathematicianName).speakingStyle}\n`
+    : ''
+  const systemPrompt = `You are ${tutorName}, a maths tutor. ${name}${mannerismLine}
 ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
 
 Based on the conversation so far, ask the student exactly ONE short question to check understanding. Make it specific and answerable (e.g. "What do we get when we factor x squared plus 5 x plus 6?"). Do NOT repeat a question you have already asked. Reply with only the question, plain English, one sentence.`
@@ -425,8 +438,11 @@ export async function evaluateAnswer(
   const client = getClient()
   const { name, memorySections } = buildTutorContext(context)
   const tutorName = context.mathematicianName ?? 'Epsilon-Delta'
+  const mannerismLine = context.mathematicianName
+    ? `\n${getMathematicianMetadata(context.mathematicianName).speakingStyle}\n`
+    : ''
   const question = messages.filter((m) => m.role === 'assistant').pop()?.content ?? ''
-  const systemPrompt = `You are ${tutorName}, a maths tutor. ${name}
+  const systemPrompt = `You are ${tutorName}, a maths tutor. ${name}${mannerismLine}
 ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
 
 You asked the student: "${question}"

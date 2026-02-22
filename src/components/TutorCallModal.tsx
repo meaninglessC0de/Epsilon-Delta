@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { chatWithTutor, type TutorMessage } from '../lib/claude'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
 import { getMetadataForAgent } from '../lib/memory'
+import { getMathematicianForUser } from '../lib/mathematician'
 import type { User, Solve } from '../types'
 import type { UserMetadata } from '../../shared/types'
 
@@ -104,10 +105,12 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
     if (!isMountedRef.current) return
     setPhaseSync('processing')
 
+    const mathematician = getMathematicianForUser(user.id)
     try {
       const reply = await chatWithTutor(msgs, {
         meta: metaRef.current,
         solves,
+        mathematicianName: mathematician,
       })
 
       if (!isMountedRef.current) return
@@ -120,9 +123,12 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
         if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
       }, 30000)
 
-      speakText(reply, () => {
-        clearTimeout(timeout)
-        if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
+      speakText(reply, {
+        mathematicianName: mathematician,
+        onEnd: () => {
+          clearTimeout(timeout)
+          if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
+        },
       }).catch(() => {
         clearTimeout(timeout)
         if (isMountedRef.current) startListening()
@@ -137,6 +143,7 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
     isMountedRef.current = true
     getMetadataForAgent().then((a) => { if (isMountedRef.current && a) metaRef.current = a.meta }).catch(() => {})
 
+    const mathematician = getMathematicianForUser(user.id)
     const greeting: TutorMessage = {
       role: 'assistant',
       content: `Hi${user.name ? ' ' + user.name : ''}! What are you working on?`,
@@ -148,9 +155,12 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
       if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
     }, 30000)
 
-    speakText(greeting.content, () => {
-      clearTimeout(timeout)
-      if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
+    speakText(greeting.content, {
+      mathematicianName: mathematician,
+      onEnd: () => {
+        clearTimeout(timeout)
+        if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
+      },
     }).catch(() => {
       clearTimeout(timeout)
       if (isMountedRef.current) startListening()

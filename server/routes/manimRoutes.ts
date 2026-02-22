@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express'
+import { Router, Request, Response, NextFunction } from 'express'
 import Anthropic from '@anthropic-ai/sdk'
 import { requireFirebaseAuth, FirebaseAuthRequest } from '../middleware/requireFirebaseAuth'
 import { getUserContextForVideo } from '../lib/getUserMetadataServer'
@@ -148,11 +148,12 @@ interface SceneSegment {
 
 const skipAuth = (process.env.MANIM_SKIP_AUTH ?? '').toLowerCase() === '1' || (process.env.MANIM_SKIP_AUTH ?? '').toLowerCase() === 'true'
 
-router.post('/generate', (req: Request, res: Response, next: Function) => {
+router.post('/generate', (req: Request, res: Response, next: NextFunction) => {
   if (skipAuth) return next()
   requireFirebaseAuth(req as FirebaseAuthRequest, res, next)
-}, (req: FirebaseAuthRequest, res: Response, next: Function) => {
-  void handler(req, res).catch(next)
+}, (req: FirebaseAuthRequest, res: Response, next: NextFunction) => {
+  res.setTimeout(120_000)
+  void handler(req, res).catch((err) => next(err))
 })
 
 async function handler(req: FirebaseAuthRequest, res: Response): Promise<void> {

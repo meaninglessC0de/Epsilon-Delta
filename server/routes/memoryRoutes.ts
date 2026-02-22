@@ -15,7 +15,7 @@ interface MemoryRow {
 
 function rowToMemory(row: MemoryRow): AgentMemory {
   return {
-    userId: row.user_id,
+    userId: String(row.user_id),
     topicsCovered: JSON.parse(row.topics_covered) as string[],
     weaknesses: JSON.parse(row.weaknesses) as string[],
     solveSummaries: JSON.parse(row.solve_summaries) as string[],
