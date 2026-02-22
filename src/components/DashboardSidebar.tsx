@@ -1,21 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { getSolves } from '../lib/storage'
+import { getMathematicianForUser } from '../lib/mathematician'
 import type { User } from '../types'
-
-const FAMOUS_MATHEMATICIANS = [
-  'Euler', 'Gauss', 'Riemann', 'Fermat', 'Pascal', 'Descartes', 'Leibniz', 'Newton',
-  'Archimedes', 'Euclid', 'Pythagoras', 'Hypatia', 'Cantor', 'Noether', 'Lovelace',
-  'Turing', 'Shannon', 'Gödel', 'Poincaré', 'Ramanujan', 'Laplace', 'Lagrange',
-  'Cauchy', 'Bernoulli', 'Galois', 'Abel', 'Diophantus', 'al-Khwarizmi', 'Bhaskara',
-  'Kovalevskaya', 'Germain', 'Dedekind', 'Hilbert', 'Kolmogorov', 'von Neumann',
-]
-
-function getMathematicianForUser(userId: string): string {
-  let hash = 0
-  for (let i = 0; i < userId.length; i++) hash = (hash << 5) - hash + userId.charCodeAt(i)
-  return FAMOUS_MATHEMATICIANS[Math.abs(hash) % FAMOUS_MATHEMATICIANS.length]
-}
 
 interface Props {
   user: User

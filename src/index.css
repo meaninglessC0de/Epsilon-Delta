@@ -2333,16 +2333,44 @@ input {
   margin: 0;
 }
 
-.topic-sidebar__label--strong {
-  color: var(--success-dark);
-}
-
-.topic-sidebar__label--help {
-  color: var(--primary-dark);
+.topic-sidebar__label--updated {
+  color: var(--text-2);
 }
 
 .topic-sidebar__label--explore {
   color: var(--text-3);
+}
+
+.topic-sidebar__skill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.topic-sidebar__skill-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+
+.topic-sidebar__skill-name {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+
+.topic-sidebar__skill-elo {
+  font-weight: 700;
+  color: var(--primary-dark);
+  flex-shrink: 0;
 }
 
 .topic-sidebar__tags {
