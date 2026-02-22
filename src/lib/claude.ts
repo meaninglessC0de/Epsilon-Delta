@@ -74,6 +74,7 @@ export async function checkWorking(
   workingBase64: string,
   previousFeedback?: string,
   userContext?: string,
+  problemImageBase64?: string,
 ): Promise<CheckResult> {
   const client = getClient()
 
@@ -81,10 +82,14 @@ export async function checkWorking(
     ? `\nStudent context (use to tailor tone and depth): ${userContext}`
     : ''
 
+  const problemImageNote = problemImageBase64
+    ? '\nThe first image is the problem itself (for reference). The second image is the student\'s current whiteboard work.'
+    : ''
+
   // Giving Claude an exact example is the most reliable way to get back pure JSON.
   const prompt = `You are a maths tutor reviewing handwritten whiteboard work in real time. Every 20 seconds the current board is sent. Analyze what the student has written — focus on the problem, parse their steps and notation.
 
-Problem: "${problem}"${previousFeedback ? `\nPrevious feedback: "${previousFeedback}"` : ''}${personalisation}
+Problem: "${problem}"${problemImageNote}${previousFeedback ? `\nPrevious feedback: "${previousFeedback}"` : ''}${personalisation}
 
 PARSING: Read handwritten digits and symbols carefully. Watch for 0 vs O, 1 vs l, 5 vs S, + vs ×. Infer intent from context and layout (left-to-right, top-to-bottom). If the board is mostly blank, doodles, illegible, or unrelated to the problem — treat as incomplete and say nothing.
 
@@ -106,12 +111,13 @@ highlightRegion: only when isCorrect is false AND isIncomplete is false. Use sma
 OTHER: Return ONLY the raw JSON. Write all maths in plain English words — no symbols like +, -, =, ×, ÷, ^, ², √, π.`
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 220,
+    model: 'claude-sonnet-4-6',
+    max_tokens: 300,
     messages: [
       {
         role: 'user',
         content: [
+          ...(problemImageBase64 ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/jpeg' as const, data: problemImageBase64 } }] : []),
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: workingBase64 } },
           { type: 'text', text: prompt },
         ],

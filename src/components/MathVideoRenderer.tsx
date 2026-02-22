@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import katex from 'katex'
 import type { ScenePlan, SceneSegment, SceneStep, ColorName } from '../types/video'
+import { speakText, stopSpeaking } from '../lib/elevenlabs'
 
 const COLORS: Record<string, string> = {
   white: '#f0f0f0',
@@ -200,21 +201,18 @@ export function MathVideoRenderer({
     }
     timers.current.push(setTimeout(runNext, 200))
 
-    // TTS: speak, advance when done (with min hold to avoid skip)
+    // TTS: speak via ElevenLabs, advance when done (with min hold to avoid skip)
     const minHold = 800
     const segmentStart = Date.now()
 
-    if (seg.narration?.trim() && 'speechSynthesis' in window) {
-      const synth = window.speechSynthesis
-      synth.cancel()
-      const u = new SpeechSynthesisUtterance(seg.narration)
-      u.rate = 0.85
-      u.onend = u.onerror = () => {
-        const elapsed = Date.now() - segmentStart
-        const delay = Math.max(0, minHold - elapsed)
-        timers.current.push(setTimeout(advance, delay + 200))
-      }
-      synth.speak(u)
+    const onTTSEnd = () => {
+      const elapsed = Date.now() - segmentStart
+      const delay = Math.max(0, minHold - elapsed)
+      timers.current.push(setTimeout(advance, delay + 200))
+    }
+
+    if (seg.narration?.trim()) {
+      speakText(seg.narration, onTTSEnd).catch(() => onTTSEnd())
     } else {
       timers.current.push(setTimeout(advance, minHold + 200))
     }
@@ -222,7 +220,7 @@ export function MathVideoRenderer({
     return () => {
       cancelled = true
       clearTimers()
-      window.speechSynthesis?.cancel()
+      stopSpeaking()
     }
   }, [segmentIndex, plan.segments, playing, runStep, onComplete, onSegmentChange, clearTimers])
 
@@ -236,10 +234,10 @@ export function MathVideoRenderer({
 
   // Stop TTS when paused or unmount
   useEffect(() => {
-    if (!playing) window.speechSynthesis?.cancel()
+    if (!playing) stopSpeaking()
   }, [playing])
 
-  useEffect(() => () => window.speechSynthesis?.cancel(), [])
+  useEffect(() => () => stopSpeaking(), [])
 
   const renderEl = (el: VisibleElement, i: number) => {
     const hl = highlight === i

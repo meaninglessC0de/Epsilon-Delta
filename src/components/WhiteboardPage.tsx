@@ -195,7 +195,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
 
       const lastFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]?.feedback
       const agentMeta = await getMetadataForAgent()
-      const result = await checkWorking(solve.problem, base64, lastFeedback, agentMeta?.contextString)
+      const result = await checkWorking(solve.problem, base64, lastFeedback, agentMeta?.contextString, solve.problemImage ?? undefined)
 
       // Only mark complete when isCorrect (fully solved and correct). Incomplete = no alert, no exit.
       if (result.isCorrect) {
@@ -248,11 +248,9 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         setHighlightRegion(null)
       }
 
-      const current = await getSolveById(solve.id)
-      if (current) {
-        current.feedbackHistory.push(entry)
-        await saveSolve(current)
-      }
+      const current = (await getSolveById(solve.id)) ?? { ...solve }
+      current.feedbackHistory = [...feedbackHistoryRef.current]
+      await saveSolve(current)
 
       if (isMountedRef.current && !isMutedRef.current && result.speakSummary) {
         speakText(result.speakSummary).catch(console.error)
@@ -304,7 +302,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       }
       const lastFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]?.feedback
       const agentMeta = await getMetadataForAgent()
-      const result = await checkWorking(solve.problem, base64, lastFeedback, agentMeta?.contextString)
+      const result = await checkWorking(solve.problem, base64, lastFeedback, agentMeta?.contextString, solve.problemImage ?? undefined)
 
       if (result.isCorrect && isMountedRef.current) {
         handleFinishRef.current()
@@ -369,11 +367,12 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     const base64 = await captureCanvas()
     const lastFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]
 
-    const current = (await getSolveById(solve.id)) ?? solve
+    const current = (await getSolveById(solve.id)) ?? { ...solve }
     current.completedAt = Date.now()
     current.status = 'completed'
     if (base64) current.finalWorking = base64
     current.finalFeedback = lastFeedback?.feedback ?? 'Session completed.'
+    current.feedbackHistory = [...feedbackHistoryRef.current]
     await saveSolve(current)
     const state = getWhiteboardState()
     if (state) await saveWhiteboard(solve.id, state)

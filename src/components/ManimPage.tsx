@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { auth } from '../lib/firebase'
 import { recordUserInput, updateVideoTopicElo, saveVideoGeneration } from '../lib/firebaseMetadata'
 import { useDevelopmentProgress } from '../lib/developmentProgressToast'
+import { stopSpeaking } from '../lib/elevenlabs'
 import { MathVideoRenderer } from './MathVideoRenderer'
 import type { ScenePlan } from '../types/video'
 
@@ -37,15 +38,14 @@ export function ManimPage({ onBack }: Props) {
 
   // Stop TTS when leaving the page or when tab becomes hidden
   useEffect(() => {
-    const cancel = () => { if ('speechSynthesis' in window) window.speechSynthesis.cancel() }
-    const onVisibility = () => { if (document.visibilityState === 'hidden') cancel() }
-    const onPageHide = () => cancel()
+    const onVisibility = () => { if (document.visibilityState === 'hidden') stopSpeaking() }
+    const onPageHide = () => stopSpeaking()
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('pagehide', onPageHide)
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('pagehide', onPageHide)
-      cancel()
+      stopSpeaking()
     }
   }, [])
 
@@ -135,7 +135,6 @@ export function ManimPage({ onBack }: Props) {
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="e.g. Explain Gaussian elimination / Solve x² + 5x + 6 = 0 by factorising"
-              disabled={phase === 'loading'}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleGenerate()
               }}

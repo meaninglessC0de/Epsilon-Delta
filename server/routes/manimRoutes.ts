@@ -81,12 +81,19 @@ arrow: label (optional), color
 ━━━ COLORS (2–3 max) ━━━
 white: primary text | blue: accent, graphs | green: highlight, conclusion
 
+
+
 ━━━ QUALITY RULES ━━━
 - 12–16 segments, duration 6–8 sec each
 - Narration: 30–45 words, complete sentences, no mid-thought cuts
 - 16:9 frame: max 4–5 visible elements; use layout "shrinkUp" or hide older elements
 - No overlap: space elements; keep graphs small; hide before adding many new elements
-- First 2: intro; middle: step-by-step; final 2: conclusion (green)`,
+- First 2: intro; middle: step-by-step; final 2: conclusion (green)
+- Every section should have a narration that relates to what is on screen.
+- Never show two identical components on the screen.
+
+`,
+
     }],
   })
 

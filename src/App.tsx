@@ -11,6 +11,7 @@ import { AuthPage } from './components/AuthPage'
 import { AppNavbar } from './components/AppNavbar'
 import { AppShellWithSidebar } from './components/AppShellWithSidebar'
 import { OnboardingFlow } from './components/onboarding/OnboardingFlow'
+import { DevelopmentProgressProvider } from './lib/developmentProgressToast'
 import type { Solve, User } from './types'
 import { saveSolve, getSolveById, initStorage } from './lib/storage'
 import { subscribeToAuth, clearToken } from './lib/auth'
@@ -267,7 +268,9 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AppRoutes />
+      <DevelopmentProgressProvider>
+        <AppRoutes />
+      </DevelopmentProgressProvider>
     </BrowserRouter>
   )
 }
