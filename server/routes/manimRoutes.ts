@@ -31,10 +31,10 @@ async function generateScenePlan(question: string, userContext?: string): Promis
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 8000,
+    max_tokens: 4000,
     messages: [{
       role: 'user',
-      content: `You are creating a 3Blue1Brown-style math video (1.5–2 minutes, browser-rendered). Use Manim-inspired concepts: FadeIn, Write, GrowFromCenter, Transform/Replace, Indicate, Circumscribe, Axes, FunctionGraph, MathTex, Table, Arrow. Keep a fixed 16:9 presentation frame in mind.
+      content: `You are creating a concise math explainer video (60–90 seconds, browser-rendered). Use Manim-inspired concepts: FadeIn, Write, GrowFromCenter, Transform/Replace, Indicate, Axes, FunctionGraph, MathTex, Table, Arrow. Keep a fixed 16:9 presentation frame in mind.
 
 Problem/Topic: "${question}"${personalisation}
 
@@ -42,8 +42,8 @@ Return ONLY a raw JSON object — no markdown, no code fences:
 {
   "segments": [
     {
-      "narration": "One complete sentence. Natural, fluid explanation. 30–45 words. Do not cut mid-thought.",
-      "duration": 7,
+      "narration": "One complete sentence. Natural, fluid explanation. 20–30 words.",
+      "duration": 6,
       "steps": [
         { "action": "show", "type": "text", "content": "…", "color": "blue", "animation": "grow" },
         { "action": "show", "type": "equation", "latex": "…", "color": "blue", "animation": "write" },
@@ -81,15 +81,13 @@ arrow: label (optional), color
 ━━━ COLORS (2–3 max) ━━━
 white: primary text | blue: accent, graphs | green: highlight, conclusion
 
-
-
 ━━━ QUALITY RULES ━━━
-- 12–16 segments, duration 6–8 sec each
-- Narration: 30–45 words, complete sentences, no mid-thought cuts
+- 8–10 segments, duration 5–7 sec each
+- Narration: 20–30 words, one complete sentence, no mid-thought cuts
 - 16:9 frame: max 4–5 visible elements; use layout "shrinkUp" or hide older elements
 - No overlap: space elements; keep graphs small; hide before adding many new elements
-- First 2: intro; middle: step-by-step; final 2: conclusion (green)
-- Every section should have a narration that relates to what is on screen.
+- First segment: intro; middle: step-by-step; last segment: conclusion (green)
+- Every segment must have narration that relates to what is on screen.
 - Never show two identical components on the screen.
 
 `,

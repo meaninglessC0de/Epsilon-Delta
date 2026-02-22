@@ -2869,6 +2869,25 @@ input {
   color: var(--text-3);
 }
 
+.manim-loading__stages {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.manim-loading__stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.4s ease, transform 0.4s ease;
+}
+
+.manim-loading__stage-dot--active {
+  background: var(--primary);
+  transform: scale(1.25);
+}
+
 /* Video result */
 .manim-result {
   display: flex;

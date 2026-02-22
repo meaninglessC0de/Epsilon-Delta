@@ -18,16 +18,40 @@ interface ManimLocationState {
 
 type Phase = 'idle' | 'loading' | 'playing' | 'done' | 'error'
 
+const LOADING_STAGES = [
+  'Writing animation script…',
+  'Generating voiceover…',
+  'Rendering video…',
+] as const
+
 export function ManimPage({ onBack }: Props) {
   const location = useLocation()
   const state = (location.state ?? {}) as ManimLocationState
   const [question, setQuestion] = useState(() => state.suggestedQuestion?.trim() ?? '')
   const [phase, setPhase] = useState<Phase>('idle')
+  const [loadingStage, setLoadingStage] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null)
   const [currentNarration, setCurrentNarration] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const loadingTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   const showProgress = useDevelopmentProgress()
+
+  useEffect(() => {
+    if (phase !== 'loading') {
+      loadingTimers.current.forEach(clearTimeout)
+      loadingTimers.current = []
+      return
+    }
+    setLoadingStage(0)
+    const t1 = setTimeout(() => setLoadingStage(1), 2500)
+    const t2 = setTimeout(() => setLoadingStage(2), 5000)
+    loadingTimers.current = [t1, t2]
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+    }
+  }, [phase])
 
   useEffect(() => {
     const s = state.suggestedQuestion?.trim()
@@ -172,7 +196,16 @@ export function ManimPage({ onBack }: Props) {
         {phase === 'loading' && (
           <div className="manim-loading">
             <div className="manim-spinner" />
-            <p className="manim-loading__step">Writing animation script…</p>
+            <p className="manim-loading__step">{LOADING_STAGES[loadingStage]}</p>
+            <div className="manim-loading__stages">
+              {LOADING_STAGES.map((label, i) => (
+                <div
+                  key={label}
+                  className={`manim-loading__stage-dot ${i <= loadingStage ? 'manim-loading__stage-dot--active' : ''}`}
+                  title={label}
+                />
+              ))}
+            </div>
             <button className="btn btn--ghost btn--sm" style={{ marginTop: '20px' }} onClick={handleCancel}>
               Cancel
             </button>

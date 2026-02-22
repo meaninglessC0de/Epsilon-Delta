@@ -151,7 +151,7 @@ Return ONLY a valid JSON array — no markdown, no code fences. Each item: { "pr
 Example: [{"problem":"Solve the equation 2x plus 5 equals 11.","region":{"x":0.05,"y":0.1,"width":0.5,"height":0.2}},{"problem":"Draw the formation tree and list free variables.","region":{"x":0.05,"y":0.35,"width":0.9,"height":0.25}}]`
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 1024,
     messages: [
       {

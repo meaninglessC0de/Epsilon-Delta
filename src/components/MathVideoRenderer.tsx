@@ -119,6 +119,11 @@ export function MathVideoRenderer({
   const [playing, setPlaying] = useState(autoPlay)
   const keyRef = useRef(0)
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+  // Stable refs for callbacks — avoids restarting the segment effect on every parent re-render
+  const onCompleteRef = useRef(onComplete)
+  const onSegmentChangeRef = useRef(onSegmentChange)
+  useEffect(() => { onCompleteRef.current = onComplete }, [onComplete])
+  useEffect(() => { onSegmentChangeRef.current = onSegmentChange }, [onSegmentChange])
 
   const clearTimers = useCallback(() => {
     timers.current.forEach(clearTimeout)
@@ -176,12 +181,12 @@ export function MathVideoRenderer({
 
     const seg = plan.segments[segmentIndex] as SceneSegment | undefined
     if (!seg) {
-      onComplete?.()
+      onCompleteRef.current?.()
       return
     }
 
     let cancelled = false
-    onSegmentChange?.(segmentIndex, seg.narration)
+    onSegmentChangeRef.current?.(segmentIndex, seg.narration)
 
     const advance = () => {
       if (cancelled) return
@@ -222,7 +227,7 @@ export function MathVideoRenderer({
       clearTimers()
       stopSpeaking()
     }
-  }, [segmentIndex, plan.segments, playing, runStep, onComplete, onSegmentChange, clearTimers])
+  }, [segmentIndex, plan.segments, playing, runStep, clearTimers])
 
   // Reset when plan changes
   useEffect(() => {
