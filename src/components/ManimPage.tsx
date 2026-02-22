@@ -1,8 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { getStoredToken } from '../lib/auth'
 
 interface Props {
   onBack: () => void
+}
+
+interface ManimLocationState {
+  fromChat?: boolean
+  suggestedQuestion?: string
 }
 
 type Phase = 'idle' | 'loading' | 'done' | 'error'
@@ -15,11 +21,21 @@ const LOADING_STEPS = [
 ]
 
 export function ManimPage({ onBack }: Props) {
-  const [question, setQuestion] = useState('')
+  const location = useLocation()
+  const state = (location.state ?? {}) as ManimLocationState
+  const [question, setQuestion] = useState(() => {
+    const s = state.suggestedQuestion?.trim()
+    return s ?? ''
+  })
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [loadingStep, setLoadingStep] = useState(0)
+
+  useEffect(() => {
+    const s = state.suggestedQuestion?.trim()
+    if (s) setQuestion(s)
+  }, [state.suggestedQuestion])
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const abortRef = useRef<AbortController | null>(null)

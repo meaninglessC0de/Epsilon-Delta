@@ -23,6 +23,12 @@ export interface FeedbackEntry {
   highlightRegion?: HighlightRegion
 }
 
+/** Excalidraw scene for whiteboard restore (elements + appState). Stored in DB so user can resume. */
+export interface WhiteboardState {
+  elements: unknown[]
+  appState: Record<string, unknown>
+}
+
 export interface Solve {
   id: string
   userId?: string
@@ -34,6 +40,14 @@ export interface Solve {
   feedbackHistory: FeedbackEntry[]
   finalFeedback?: string
   status: 'active' | 'completed'
+  /** When set, this solve is part of a problem sheet; use with questionIndex/questionCount. */
+  groupId?: string
+  questionIndex?: number
+  questionCount?: number
+  /** Optional title for the sheet (e.g. "Week 3 homework"). */
+  sheetTitle?: string
+  /** Full Excalidraw scene so the whiteboard can be restored when user resumes. */
+  whiteboardState?: WhiteboardState
 }
 
 export interface User {

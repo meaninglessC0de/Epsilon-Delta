@@ -5,7 +5,11 @@ import {
   saveSolveToFirestore,
   deleteSolveFromFirestore,
 } from './firebaseSolves'
-import type { Solve } from '../types'
+import {
+  getWhiteboardFromFirestore,
+  saveWhiteboardToFirestore,
+} from './firebaseWhiteboards'
+import type { Solve, WhiteboardState } from '../types'
 
 const BASE_KEY = 'epsilon_delta_solves_v1'
 
@@ -26,6 +30,12 @@ export async function getSolveById(id: string): Promise<Solve | null> {
   return getSolveByIdFromFirestore(uid, id)
 }
 
+/** Returns solves in the same group, sorted by questionIndex. */
+export async function getSolvesByGroupId(groupId: string): Promise<Solve[]> {
+  const all = await getSolves()
+  return all.filter((s) => s.groupId === groupId).sort((a, b) => (a.questionIndex ?? 0) - (b.questionIndex ?? 0))
+}
+
 export async function saveSolve(solve: Solve): Promise<void> {
   const uid = auth.currentUser?.uid
   if (!uid) return
@@ -36,6 +46,20 @@ export async function deleteSolve(id: string): Promise<void> {
   const uid = auth.currentUser?.uid
   if (!uid) return
   await deleteSolveFromFirestore(uid, id)
+}
+
+/** Fetch whiteboard data for a solve from the whiteboards collection (for resume when solve is not completed). */
+export async function getWhiteboard(solveId: string): Promise<WhiteboardState | null> {
+  const uid = auth.currentUser?.uid
+  if (!uid) return null
+  return getWhiteboardFromFirestore(uid, solveId)
+}
+
+/** Save whiteboard data to the whiteboards collection (who made it is implied by auth). */
+export async function saveWhiteboard(solveId: string, whiteboardState: WhiteboardState): Promise<void> {
+  const uid = auth.currentUser?.uid
+  if (!uid) return
+  await saveWhiteboardToFirestore(uid, solveId, whiteboardState)
 }
 
 /** One-time: read legacy localStorage key and return solves if present (for migration). */

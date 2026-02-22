@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { DashboardPage } from './components/DashboardPage'
+import { ChatPage } from './components/ChatPage'
 import { ManimPage } from './components/ManimPage'
 import { NewProblemPage } from './components/NewProblemPage'
 import { WhiteboardPage } from './components/WhiteboardPage'
@@ -11,21 +12,34 @@ import type { Solve, User } from './types'
 import { saveSolve, getSolveById, initStorage } from './lib/storage'
 import { subscribeToAuth, clearToken } from './lib/auth'
 
-// --- Auth: always default to login. User is set only after explicit Sign in / Sign up (not from persisted session). ---
-type AuthState = { user: User | null; onboardingComplete: boolean }
+// --- Auth: restore from local session when user has logged in on this device; otherwise show login. ---
+type AuthState = { user: User | null; onboardingComplete: boolean; authReady: boolean }
 
-function useAuth(): AuthState & { setAuth: (s: AuthState) => void } {
-  const [state, setState] = useState<AuthState>({ user: null, onboardingComplete: false })
+function useAuth(): AuthState & { setAuth: (s: Partial<AuthState>) => void } {
+  const [state, setState] = useState<AuthState>({ user: null, onboardingComplete: false, authReady: false })
 
   useEffect(() => {
-    const unsub = subscribeToAuth((fbUser, _onboardingComplete) => {
-      // Only clear state when Firebase says logged out (e.g. logout in another tab). Never set user from Firebase on load.
-      if (!fbUser) setState({ user: null, onboardingComplete: false })
+    const unsub = subscribeToAuth((user, onboardingComplete) => {
+      setState((prev) => ({
+        user: user ?? null,
+        onboardingComplete: user ? onboardingComplete : false,
+        authReady: true,
+      }))
     })
     return unsub
   }, [])
 
-  return { ...state, setAuth: setState }
+  const setAuth = useCallback((next: Partial<AuthState>) => {
+    setState((prev) => ({ ...prev, ...next }))
+  }, [])
+
+  return { ...state, setAuth }
+}
+
+function useInitStorageOnUser(user: User | null) {
+  useEffect(() => {
+    if (user) initStorage(user.id)
+  }, [user?.id])
 }
 
 // --- Screens (no loading screen for auth). ---
@@ -90,8 +104,10 @@ function SolveScreen({ onFinish }: { onFinish: () => void }) {
 
 // --- Router: one place that reads auth and renders the right screen. ---
 function AppRoutes() {
-  const { user, onboardingComplete, setAuth } = useAuth()
+  const { user, onboardingComplete, authReady, setAuth } = useAuth()
   const navigate = useNavigate()
+
+  useInitStorageOnUser(user)
 
   const onAuthSuccess = useCallback((data: { user: User; onboardingComplete: boolean }) => {
     initStorage(data.user.id)
@@ -115,6 +131,7 @@ function AppRoutes() {
   const goNew = useCallback(() => navigate('/new', { replace: true }), [navigate])
   const goSolve = useCallback((id: string) => navigate(`/solve/${id}`, { replace: true }), [navigate])
   const goManim = useCallback(() => navigate('/manim', { replace: true }), [navigate])
+  const goChat = useCallback(() => navigate('/chat', { replace: true }), [navigate])
 
   const startSolve = useCallback(async (problem: string, problemImage?: string) => {
     const solve: Solve = {
@@ -128,6 +145,43 @@ function AppRoutes() {
     await saveSolve(solve)
     navigate(`/solve/${solve.id}`, { replace: true })
   }, [navigate])
+
+  const startSheet = useCallback(
+    async (
+      questions: { problem: string; problemImage?: string }[],
+      sheetImageBase64?: string,
+      sheetTitle?: string,
+    ) => {
+      const groupId = crypto.randomUUID()
+      const createdAt = Date.now()
+      const N = questions.length
+      const solves: Solve[] = questions.map((q, i) => ({
+        id: crypto.randomUUID(),
+        problem: q.problem,
+        problemImage: q.problemImage,
+        createdAt,
+        feedbackHistory: [],
+        status: 'active',
+        groupId,
+        questionIndex: i,
+        questionCount: N,
+        sheetTitle: sheetTitle ?? undefined,
+      }))
+      for (const s of solves) await saveSolve(s)
+      navigate(`/solve/${solves[0].id}`, { replace: true })
+    },
+    [navigate],
+  )
+
+  // Auth not yet restored from local session → show brief loading
+  if (!authReady) {
+    return (
+      <div className="auth-loading" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'var(--bg)', flexDirection: 'column', gap: '12px' }}>
+        <div className="solve-loading-spinner" style={{ width: 32, height: 32, border: '3px solid var(--border)', borderTopColor: 'var(--primary)', borderRadius: '50%' }} />
+        <p style={{ color: 'var(--text-2)', fontSize: '0.95rem' }}>Checking sign-in…</p>
+      </div>
+    )
+  }
 
   // Not logged in → show login (any route)
   if (!user) {
@@ -158,7 +212,7 @@ function AppRoutes() {
         path="/"
         element={
           <AppShell user={user} onLogout={onLogout} onHome={goHome}>
-            <DashboardPage user={user} onNewProblem={goNew} onResumeSolve={goSolve} onGenerateVideo={goManim} />
+            <DashboardPage user={user} onNewProblem={goNew} onResumeSolve={goSolve} onGenerateVideo={goManim} onOpenChat={goChat} />
           </AppShell>
         }
       />
@@ -166,11 +220,19 @@ function AppRoutes() {
         path="/new"
         element={
           <AppShell user={user} onLogout={onLogout} onHome={goHome}>
-            <NewProblemPage onBack={goHome} onContinue={startSolve} />
+            <NewProblemPage onBack={goHome} onContinue={startSolve} onContinueSheet={startSheet} />
           </AppShell>
         }
       />
       <Route path="/solve/:solveId" element={<SolveScreen onFinish={goHome} />} />
+      <Route
+        path="/chat"
+        element={
+          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
+            <ChatPage user={user} onBack={goHome} />
+          </AppShell>
+        }
+      />
       <Route
         path="/manim"
         element={

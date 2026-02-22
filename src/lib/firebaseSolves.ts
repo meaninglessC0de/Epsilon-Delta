@@ -11,7 +11,7 @@ import {
   getFirestore,
   type Firestore,
 } from 'firebase/firestore'
-import type { Solve, FeedbackEntry } from '../../shared/types'
+import type { Solve, FeedbackEntry, WhiteboardState } from '../../shared/types'
 import { db } from './firebase'
 
 function solvesCollection(uid: string, firestore?: Firestore) {
@@ -25,6 +25,18 @@ function solveDoc(uid: string, solveId: string, firestore?: Firestore) {
 }
 
 function firestoreToSolve(id: string, data: Record<string, unknown>): Solve {
+  let whiteboardState: WhiteboardState | undefined
+  const ws = data.whiteboardState
+  if (typeof ws === 'string') {
+    try {
+      const parsed = JSON.parse(ws) as WhiteboardState
+      if (parsed && Array.isArray(parsed.elements)) whiteboardState = parsed
+    } catch {
+      /* ignore */
+    }
+  } else if (ws && typeof ws === 'object' && Array.isArray((ws as Record<string, unknown>).elements)) {
+    whiteboardState = ws as WhiteboardState
+  }
   return {
     id,
     problem: (data.problem as string) ?? '',
@@ -35,11 +47,30 @@ function firestoreToSolve(id: string, data: Record<string, unknown>): Solve {
     finalFeedback: data.finalFeedback as string | undefined,
     feedbackHistory: Array.isArray(data.feedbackHistory) ? (data.feedbackHistory as FeedbackEntry[]) : [],
     status: (data.status as 'active' | 'completed') ?? 'active',
+    groupId: data.groupId as string | undefined,
+    questionIndex: data.questionIndex as number | undefined,
+    questionCount: data.questionCount as number | undefined,
+    sheetTitle: data.sheetTitle as string | undefined,
+    whiteboardState,
   }
 }
 
+/** Recursively strip undefined (Firestore disallows it). Omit undefined keys; undefined in arrays becomes null. */
+function stripUndefined<T>(value: T): T {
+  if (value === undefined) return null as T
+  if (Array.isArray(value)) return value.map(stripUndefined) as T
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) {
+      if (v !== undefined) out[k] = stripUndefined(v)
+    }
+    return out as T
+  }
+  return value
+}
+
 function solveToFirestore(solve: Solve): Record<string, unknown> {
-  return {
+  const raw: Record<string, unknown> = {
     id: solve.id,
     problem: solve.problem,
     problemImage: solve.problemImage ?? null,
@@ -49,7 +80,13 @@ function solveToFirestore(solve: Solve): Record<string, unknown> {
     finalFeedback: solve.finalFeedback ?? null,
     feedbackHistory: solve.feedbackHistory,
     status: solve.status,
+    groupId: solve.groupId ?? null,
+    questionIndex: solve.questionIndex ?? null,
+    questionCount: solve.questionCount ?? null,
+    sheetTitle: solve.sheetTitle ?? null,
+    whiteboardState: solve.whiteboardState ? JSON.stringify(solve.whiteboardState) : null,
   }
+  return stripUndefined(raw) as Record<string, unknown>
 }
 
 export async function getSolvesFromFirestore(uid: string, firestore?: Firestore): Promise<Solve[]> {

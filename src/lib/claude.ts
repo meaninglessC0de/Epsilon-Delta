@@ -23,6 +23,8 @@ export interface CheckResult {
   speakSummary?: string
   /** When wrong: approximate region of the error (0–1) for whiteboard highlight */
   highlightRegion?: HighlightRegion
+  /** When true: work is incomplete (not finished). App will not show alert; do not mark complete. */
+  isIncomplete?: boolean
 }
 
 function extractText(response: Anthropic.Message): string {
@@ -81,18 +83,26 @@ export async function checkWorking(
   const prompt = `You are a maths tutor reviewing a student's handwritten work.
 Problem: "${problem}"${previousFeedback ? `\nPrevious feedback: "${previousFeedback}"` : ''}${personalisation}
 
-Look at the image and reply with ONLY a raw JSON object — no markdown, no code fences, no explanation. Use exactly this shape (all keys required; speakSummary and highlightRegion only when isCorrect is false):
-{"feedback":"1-2 specific sentences about what is correct and where any error is.","isCorrect":false,"hints":["one concrete next step if wrong, else leave array empty"],"encouragement":"Short upbeat phrase.","speakSummary":"When wrong only: one short sentence for voice, e.g. 'Check the sign on the second term.'","highlightRegion":{"x":0.1,"y":0.2,"width":0.4,"height":0.25}}
+Look at the image and reply with ONLY a raw JSON object — no markdown, no code fences, no explanation. Use exactly this shape (all keys required; speakSummary, highlightRegion, isIncomplete only when isCorrect is false):
+{"feedback":"1-2 sentences.","isCorrect":false,"hints":["one concrete next step if wrong, else empty"],"encouragement":"Short phrase.","speakSummary":"When objectively wrong only: one short sentence for voice.","highlightRegion":{"x":0.1,"y":0.2,"width":0.4,"height":0.25},"isIncomplete":true}
 
-highlightRegion: when isCorrect is false, give approximate region of the error as fractions of image size (0-1). x,y = top-left; width,height = size. If unsure use e.g. {"x":0,"y":0.3,"width":0.5,"height":0.3}. Omit highlightRegion entirely if isCorrect is true.
+CRITICAL — when to set isCorrect to true (mark as COMPLETE and correct):
+- Set isCorrect to true ONLY when the problem is FULLY SOLVED: the student has reached a final answer, shown all steps, and the answer is correct. The work must be complete — not mid-solution, not a partial attempt, not "almost there".
+- If the board is blank, mostly empty, work in progress, or the student has not reached a final answer, set isCorrect to false.
 
-CRITICAL RULES — failure to follow these will break the app:
+CRITICAL — when isCorrect is false, set isIncomplete:
+- Set isIncomplete to true when the work is not finished (blank, partial, in progress, no final answer yet). Do not provide speakSummary or highlightRegion for incomplete work — the app will not show an alert.
+- Set isIncomplete to false (or omit) when there is an OBJECTIVE mathematical error: wrong step, wrong answer, wrong sign, wrong formula. Then provide feedback, hints, speakSummary, and optionally highlightRegion so the app can show an alert.
+
+highlightRegion: only when isCorrect is false AND isIncomplete is false. Use a small region (0-1 fractions). Omit if unsure.
+
+OTHER RULES:
 1. Return ONLY the raw JSON object. No extra text, no code fences, no markdown.
-2. Write ALL mathematics in plain English words only. Never use symbols like +, -, =, ×, ÷, ^, ², √, π, <, >, or any LaTeX. Write "x squared plus three equals seven" not "x² + 3 = 7".`
+2. Write ALL mathematics in plain English words only. Never use symbols like +, -, =, ×, ÷, ^, ², √, π, <, >, or any LaTeX.`
 
   const response = await client.messages.create({
-    model: 'claude-opus-4-6',
-    max_tokens: 256,
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 180,
     messages: [
       {
         role: 'user',
@@ -105,6 +115,68 @@ CRITICAL RULES — failure to follow these will break the app:
   })
 
   return parseCheckResult(extractText(response))
+}
+
+/** One extracted question: text and optional region (0-1) for diagram crop. */
+export interface SheetQuestion {
+  problem: string
+  /** When the question has a diagram, give the region where it appears (0-1 normalized). */
+  region?: { x: number; y: number; width: number; height: number }
+}
+
+/** Extract questions from a problem sheet image; optionally with regions for diagram crops. */
+export async function extractQuestionsFromSheet(sheetImageBase64: string): Promise<SheetQuestion[]> {
+  const client = getClient()
+  const prompt = `You are looking at an image of a maths problem sheet (homework, worksheet, exam) that contains MULTIPLE distinct questions or problems.
+
+Your task: list each question as an object with "problem" (string) and optionally "region" (for diagram-based questions).
+
+Return ONLY a valid JSON array — no markdown, no code fences. Each item: { "problem": "question text here", "region": { "x": 0.1, "y": 0.2, "width": 0.4, "height": 0.25 } }.
+- "problem": full text or clear short description of that question. Use plain English for maths (e.g. "x squared" not "x²").
+- "region": only include when the question has a diagram, figure, or graph that should be shown with the question. Give the approximate area as fractions of image size (0-1): x,y = top-left, width,height = size. Omit "region" for text-only questions.
+- If the sheet has numbered items (1, 2, 3...), output one object per item.
+- If you cannot separate questions, return at least one item: [{ "problem": "Problem sheet – see image" }].
+
+Example: [{"problem":"Solve the equation 2x plus 5 equals 11.","region":{"x":0.05,"y":0.1,"width":0.5,"height":0.2}},{"problem":"Draw the formation tree and list free variables.","region":{"x":0.05,"y":0.35,"width":0.9,"height":0.25}}]`
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1024,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: sheetImageBase64 } },
+          { type: 'text', text: prompt },
+        ],
+      },
+    ],
+  })
+  const raw = extractText(response)
+  const cleaned = raw.replace(/^```[\w]*\s*/m, '').replace(/```\s*$/m, '').trim()
+  const match = cleaned.match(/\[[\s\S]*\]/)
+  if (!match) return [{ problem: 'Problem sheet – see image' }]
+  const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
+  try {
+    const arr = JSON.parse(match[0]) as unknown
+    if (!Array.isArray(arr)) return [{ problem: 'Problem sheet – see image' }]
+    return arr
+      .filter((x): x is { problem?: string; region?: { x?: number; y?: number; width?: number; height?: number } } => x !== null && typeof x === 'object')
+      .map((item) => {
+        const problem = typeof item.problem === 'string' && item.problem.trim() ? item.problem.trim() : 'Question'
+        const region = item.region && typeof item.region === 'object'
+          ? {
+              x: clamp01(Number(item.region.x) || 0),
+              y: clamp01(Number(item.region.y) || 0),
+              width: clamp01(Number(item.region.width) || 0.5),
+              height: clamp01(Number(item.region.height) || 0.25),
+            }
+          : undefined
+        return { problem, region }
+      })
+  } catch {
+    return [{ problem: 'Problem sheet – see image' }]
+  }
 }
 
 // After a solve completes, update the agent memory with new topics/weaknesses/summary. Returns primaryTopic for ELO.
@@ -172,20 +244,40 @@ Rules:
 // Voice tutor — fast conversational AI
 export interface TutorMessage { role: 'user' | 'assistant'; content: string }
 
-export async function chatWithTutor(
-  messages: TutorMessage[],
-  context: {
-    userName?: string
-    solves: Array<{ problem: string; status: string; finalFeedback?: string }>
-    memory?: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }
-    /** Full metadata context string for personalisation (tone, style, weaknesses, etc.). */
-    userContext?: string
-  }
-): Promise<string> {
-  const client = getClient()
+/** Graph spec for visual aid: parabola, line, or point set. */
+export type TutorGraphSpec =
+  | { type: 'quadratic'; a: number; b: number; c: number; xMin: number; xMax: number }
+  | { type: 'line'; slope: number; intercept: number; xMin: number; xMax: number }
+  | { type: 'points'; points: [number, number][]; xMin?: number; xMax?: number; yMin?: number; yMax?: number }
 
+export interface TutorResponse {
+  /** Short supplemental text for the chat (key points, 1–2 lines). Not a transcript of what is spoken. */
+  content: string
+  /** Full conversational reply to speak aloud via TTS. */
+  speak: string
+  /** When true, this message is a question for the student to answer. Mic disabled until they answer. */
+  isQuestion?: boolean
+  /** Optional equation to display when discussing a formula. */
+  equation?: string
+  /** Optional graph to display when discussing a function or relationship. */
+  graph?: TutorGraphSpec
+}
+
+export interface EvaluateAnswerResult {
+  correct: boolean
+  content: string
+  speak: string
+}
+
+export type TutorContext = {
+  userName?: string
+  solves: Array<{ problem: string; status: string; finalFeedback?: string }>
+  memory?: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }
+  userContext?: string
+}
+
+function buildTutorContext(context: TutorContext) {
   const name = context.userName ? `The student's name is ${context.userName}.` : ''
-
   const memorySections: string[] = []
   if (context.userContext) memorySections.push(`Student profile: ${context.userContext}`)
   if (context.memory) {
@@ -199,6 +291,15 @@ export async function chatWithTutor(
       memorySections.push(`Recent problem summaries:\n${recent.map((s) => `- ${s}`).join('\n')}`)
     }
   }
+  return { name, memorySections }
+}
+
+export async function chatWithTutor(
+  messages: TutorMessage[],
+  context: TutorContext
+): Promise<string> {
+  const client = getClient()
+  const { name, memorySections } = buildTutorContext(context)
 
   const systemPrompt = `You are Epsilon-Delta, a warm and encouraging maths tutor having a voice conversation with a student. ${name}
 ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
@@ -219,6 +320,126 @@ CRITICAL RULES for voice output:
 
   const block = response.content.find((b) => b.type === 'text')
   return block?.type === 'text' ? block.text : "I'm here to help — what would you like to work on?"
+}
+
+export async function chatWithTutorStructured(
+  messages: TutorMessage[],
+  context: TutorContext & { mathematicianName?: string }
+): Promise<TutorResponse> {
+  const client = getClient()
+  const { name, memorySections } = buildTutorContext(context)
+  const tutorName = context.mathematicianName ?? 'Epsilon-Delta'
+  const systemPrompt = `You are ${tutorName}, a warm maths tutor in a voice conversation. The student hears you (TTS) and sees a short on-screen summary. ${name}
+${memorySections.length ? '\n' + memorySections.join('\n') : ''}
+
+Reply with a JSON object only: {"content":"...","speak":"...","isQuestion":false,"equation":"optional","graph":"optional"}
+
+- speak: What to say aloud (TTS). Plain English, 1-3 short sentences. Use words for maths: "x squared" not "x²". Be specific and helpful — avoid vague phrases like "you need to understand". Explain the actual step or concept clearly.
+- content: SHORT on-screen summary that SUPPLEMENTS what you say — key point or takeaway in 1 line. NOT a transcript. No LaTeX. Be concrete (e.g. "Factor pairs of 6: 2 and 3 give middle term").
+- isQuestion: Set true ONLY when you are asking the student a question they must answer (e.g. "What would you factor first?"). Omit or false otherwise.
+- equation: Only when discussing a specific equation. Plain form e.g. "x² + 5x + 6 = 0". Omit if not relevant.
+- graph: Only when a graph helps (parabola, line, plot). Use one of:
+  - {"type":"quadratic","a":1,"b":0,"c":0,"xMin":-5,"xMax":5} for y = ax² + bx + c
+  - {"type":"line","slope":1,"intercept":0,"xMin":-5,"xMax":5} for y = mx + c
+  - {"type":"points","points":[[0,0],[1,1],[2,4]],"xMin":0,"xMax":5,"yMin":0,"yMax":10}
+  Omit graph if not relevant.`
+
+  const response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 280,
+    system: systemPrompt,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+  })
+
+  const raw = (response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined)?.text ?? ''
+  const stripped = raw.replace(/^```\w*\s*/, '').replace(/\s*```$/, '').trim()
+  // Extract JSON object from text (model may add extra prose before/after)
+  const jsonMatch = stripped.match(/\{[\s\S]*\}/)
+  const jsonStr = jsonMatch ? jsonMatch[0] : stripped
+  const fallback = "I'm here to help — what would you like to work on?"
+  try {
+    const parsed = JSON.parse(jsonStr) as TutorResponse
+    const speak = (typeof parsed.speak === 'string' ? parsed.speak : null)
+      ?? (typeof parsed.content === 'string' ? parsed.content : null)
+    return {
+      content: (typeof parsed.content === 'string' ? parsed.content : null) ?? speak?.slice(0, 80) ?? 'Key point',
+      speak: (speak && !speak.includes('{') && !speak.includes('}')) ? speak : fallback,
+      isQuestion: !!parsed.isQuestion,
+      equation: parsed.equation,
+      graph: parsed.graph,
+    }
+  } catch {
+    return { content: 'Key point', speak: fallback }
+  }
+}
+
+export async function tutorAskQuestion(
+  messages: TutorMessage[],
+  context: TutorContext & { mathematicianName?: string }
+): Promise<string> {
+  const client = getClient()
+  const { name, memorySections } = buildTutorContext(context)
+  const tutorName = context.mathematicianName ?? 'Epsilon-Delta'
+  const systemPrompt = `You are ${tutorName}, a maths tutor. ${name}
+${memorySections.length ? '\n' + memorySections.join('\n') : ''}
+
+Based on the conversation so far, ask the student exactly ONE short question to check understanding. Make it specific and answerable (e.g. "What do we get when we factor x squared plus 5 x plus 6?"). Reply with only the question, plain English, one sentence.`
+
+  const appended = [...messages, { role: 'user' as const, content: '[Please ask the student one question based on our conversation that they should answer.]' }]
+  const response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 80,
+    system: systemPrompt,
+    messages: appended.map((m) => ({ role: m.role, content: m.content })),
+  })
+
+  const block = response.content.find((b) => b.type === 'text')
+  return block?.type === 'text' ? block.text : 'What part would you like to go over again?'
+}
+
+export async function evaluateAnswer(
+  messages: TutorMessage[],
+  userAnswer: string,
+  context: TutorContext & { mathematicianName?: string }
+): Promise<EvaluateAnswerResult> {
+  const client = getClient()
+  const { name, memorySections } = buildTutorContext(context)
+  const tutorName = context.mathematicianName ?? 'Epsilon-Delta'
+  const question = messages.filter((m) => m.role === 'assistant').pop()?.content ?? ''
+  const systemPrompt = `You are ${tutorName}, a maths tutor. ${name}
+${memorySections.length ? '\n' + memorySections.join('\n') : ''}
+
+You asked the student: "${question}"
+Their answer: "${userAnswer}"
+
+Reply with a JSON object only: {"correct":true|false,"content":"...","speak":"..."}
+
+- correct: true if the answer is substantially right (allow wording differences). false if wrong or incomplete.
+- content: SHORT on-screen summary (1 line). If correct: brief positive (e.g. "Correct — you factored it right"). If wrong: key point they missed (e.g. "Check the sign of the constant term").
+- speak: What to say aloud (TTS). Plain English, 1-3 short sentences. If CORRECT: brief praise. If WRONG: explain clearly WHY it is wrong and what the right approach is. Be specific — name the mistake and the correct step. Avoid vague phrases like "you need to think about it". No LaTeX, use words for maths.`
+
+  const appended = [...messages, { role: 'user' as const, content: userAnswer }]
+  const response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 200,
+    system: systemPrompt,
+    messages: appended.map((m) => ({ role: m.role, content: m.content })),
+  })
+
+  const raw = (response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined)?.text ?? ''
+  const jsonMatch = raw.replace(/^```\w*\s*/, '').replace(/\s*```$/, '').trim().match(/\{[\s\S]*\}/)
+  const jsonStr = jsonMatch ? jsonMatch[0] : raw
+  try {
+    const parsed = JSON.parse(jsonStr) as EvaluateAnswerResult
+    const speak = typeof parsed.speak === 'string' ? parsed.speak : 'Good try — let me explain.'
+    return {
+      correct: !!parsed.correct,
+      content: typeof parsed.content === 'string' ? parsed.content : (parsed.correct ? 'Correct.' : 'Not quite.'),
+      speak: speak.includes('{') || speak.includes('}') ? 'Good try — let me explain.' : speak,
+    }
+  } catch {
+    return { correct: false, content: 'Let me explain.', speak: 'Good try — let me walk you through it.' }
+  }
 }
 
 // Final feedback — slightly more detail, still concise

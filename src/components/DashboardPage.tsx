@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { getSolves, deleteSolve } from '../lib/storage'
-import { TutorCallModal } from './TutorCallModal'
 import type { User, Solve } from '../types'
 
 interface Props {
@@ -8,6 +7,24 @@ interface Props {
   onNewProblem: () => void
   onResumeSolve: (id: string) => void
   onGenerateVideo: () => void
+  onOpenChat: () => void
+}
+
+const FAMOUS_MATHEMATICIANS = [
+  'Euler', 'Gauss', 'Riemann', 'Fermat', 'Pascal', 'Descartes', 'Leibniz', 'Newton',
+  'Archimedes', 'Euclid', 'Pythagoras', 'Hypatia', 'Cantor', 'Noether', 'Lovelace',
+  'Turing', 'Shannon', 'Gödel', 'Poincaré', 'Ramanujan', 'Laplace', 'Lagrange',
+  'Cauchy', 'Bernoulli', 'Galois', 'Abel', 'Diophantus', 'al-Khwarizmi', 'Bhaskara',
+  'Kovalevskaya', 'Germain', 'Dedekind', 'Hilbert', 'Kolmogorov', 'von Neumann',
+  'Euclid', 'Ptolemy', 'Fibonacci', 'Cardano', 'Viète', 'Brahmagupta', 'Omar Khayyam',
+  'Tartaglia', 'Bombelli', 'Napier', 'Kepler', 'Galileo', 'Cavalieri', 'Fermat',
+  'Wallis', 'Brouwer', 'Hausdorff', 'Lebesgue', 'Borel', 'Banach', 'Bourbaki',
+]
+
+function getMathematicianForUser(userId: string): string {
+  let hash = 0
+  for (let i = 0; i < userId.length; i++) hash = (hash << 5) - hash + userId.charCodeAt(i)
+  return FAMOUS_MATHEMATICIANS[Math.abs(hash) % FAMOUS_MATHEMATICIANS.length]
 }
 
 function getGreeting(): string {
@@ -108,26 +125,139 @@ function SolveCard({
   )
 }
 
-export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVideo }: Props) {
+/** One card for a problem sheet (group of whiteboards). */
+function SheetCard({
+  groupSolves,
+  onDeleteGroup,
+  onResume,
+}: {
+  groupSolves: Solve[]
+  onDeleteGroup: (ids: string[]) => void
+  onResume: (id: string) => void
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const first = groupSolves[0]
+  const completedCount = groupSolves.filter((s) => s.status === 'completed').length
+  const hasActive = groupSolves.some((s) => s.status === 'active')
+  const resumeTarget = groupSolves.find((s) => s.status === 'active') ?? first
+
+  const mostRecentSolve = useMemo(() => {
+    const withThumbnail = groupSolves.filter((s) => s.finalWorking)
+    if (withThumbnail.length === 0) return null
+    return withThumbnail.sort((a, b) => {
+      const aTs = a.feedbackHistory[a.feedbackHistory.length - 1]?.timestamp ?? a.createdAt
+      const bTs = b.feedbackHistory[b.feedbackHistory.length - 1]?.timestamp ?? b.createdAt
+      return bTs - aTs
+    })[0]
+  }, [groupSolves])
+
+  return (
+    <article className="solve-card solve-card--sheet">
+      <div className="solve-card__thumbnail solve-card__thumbnail--sheet">
+        {mostRecentSolve?.finalWorking ? (
+          <img src={`data:image/jpeg;base64,${mostRecentSolve.finalWorking}`} alt="Most recent whiteboard" />
+        ) : (
+          <span className="solve-card__thumbnail-icon">📄</span>
+        )}
+      </div>
+      <div className="solve-card__body">
+        <div className="solve-card__meta">
+          <span className={`solve-card__badge solve-card__badge--${hasActive ? 'active' : 'completed'}`}>
+            {hasActive ? 'In Progress' : 'Completed'}
+          </span>
+          <span className="solve-card__date">{formatDate(first.createdAt)}</span>
+        </div>
+        <p className="solve-card__problem">
+          {first.sheetTitle || 'Problem sheet'} ({groupSolves.length} questions)
+        </p>
+        <p className="solve-card__feedback">
+          {completedCount}/{groupSolves.length} completed
+        </p>
+        <div className="solve-card__footer">
+          <div className="solve-card__actions">
+            {hasActive && (
+              <button className="btn btn--ghost btn--sm" onClick={() => onResume(resumeTarget.id)}>
+                Resume
+              </button>
+            )}
+            {confirmDelete ? (
+              <>
+                <button
+                  className="btn btn--danger btn--sm"
+                  onClick={() => onDeleteGroup(groupSolves.map((s) => s.id))}
+                >
+                  Confirm
+                </button>
+                <button className="btn btn--ghost btn--sm" onClick={() => setConfirmDelete(false)}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn btn--ghost btn--sm solve-card__delete"
+                onClick={() => setConfirmDelete(true)}
+              >
+                Delete sheet
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVideo, onOpenChat }: Props) {
   const [solves, setSolves] = useState<Solve[]>([])
   const [loading, setLoading] = useState(true)
-  const [showCall, setShowCall] = useState(false)
 
-  useEffect(() => {
+  const refetchSolves = useCallback(() => {
     getSolves()
       .then(setSolves)
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    refetchSolves()
+  }, [refetchSolves])
+
+  // Refetch when returning to dashboard (e.g. from whiteboard) so thumbnails update
+  useEffect(() => {
+    const onFocus = () => refetchSolves()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [refetchSolves])
+
   async function handleDelete(id: string) {
     await deleteSolve(id)
     setSolves(await getSolves())
   }
 
+  async function handleDeleteGroup(ids: string[]) {
+    for (const id of ids) await deleteSolve(id)
+    setSolves(await getSolves())
+  }
+
   const displayName = user.name ?? user.email.split('@')[0]
-  const active = solves.filter((s) => s.status === 'active')
-  const completed = solves.filter((s) => s.status === 'completed')
+  const mathematician = useMemo(() => getMathematicianForUser(user.id), [user.id])
+
+  const { standaloneActive, standaloneCompleted, groupsActive, groupsCompleted } = useMemo(() => {
+    const active = solves.filter((s) => s.status === 'active')
+    const completed = solves.filter((s) => s.status === 'completed')
+    const standaloneActive = active.filter((s) => !s.groupId)
+    const standaloneCompleted = completed.filter((s) => !s.groupId)
+    const groupIds = [...new Set(solves.map((s) => s.groupId).filter(Boolean))] as string[]
+    const groupsActive: Solve[][] = []
+    const groupsCompleted: Solve[][] = []
+    for (const gid of groupIds) {
+      const group = solves.filter((s) => s.groupId === gid).sort((a, b) => (a.questionIndex ?? 0) - (b.questionIndex ?? 0))
+      const hasActive = group.some((s) => s.status === 'active')
+      if (hasActive) groupsActive.push(group)
+      else groupsCompleted.push(group)
+    }
+    return { standaloneActive, standaloneCompleted, groupsActive, groupsCompleted }
+  }, [solves])
 
   return (
     <div className="dashboard-page">
@@ -139,11 +269,11 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
         <div className="dashboard-stats">
           <span>{solves.length} problem{solves.length !== 1 ? 's' : ''} total</span>
           <span>·</span>
-          <span>{completed.length} completed</span>
-          {active.length > 0 && (
+          <span>{standaloneCompleted.length + groupsCompleted.length} completed</span>
+          {standaloneActive.length + groupsActive.length > 0 && (
             <>
               <span>·</span>
-              <span>{active.length} in progress</span>
+              <span>{standaloneActive.length + groupsActive.length} in progress</span>
             </>
           )}
         </div>
@@ -156,9 +286,9 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
           </button>
           <button
             className="btn btn--ghost btn--lg"
-            onClick={() => setShowCall(true)}
+            onClick={onOpenChat}
           >
-            📞 Hop on a call
+            Talk to <span className="dashboard-ai-name">{mathematician}</span>
           </button>
           <button
             className="btn btn--ghost btn--lg"
@@ -185,11 +315,11 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
           </div>
         ) : (
           <>
-            {active.length > 0 && (
+            {(standaloneActive.length > 0 || groupsActive.length > 0) && (
               <section className="solve-section">
                 <h2 className="solve-section__title">In Progress</h2>
                 <div className="solve-grid">
-                  {active.map((s) => (
+                  {standaloneActive.map((s) => (
                     <SolveCard
                       key={s.id}
                       solve={s}
@@ -197,20 +327,36 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
                       onResume={onResumeSolve}
                     />
                   ))}
+                  {groupsActive.map((group) => (
+                    <SheetCard
+                      key={group[0].groupId}
+                      groupSolves={group}
+                      onDeleteGroup={handleDeleteGroup}
+                      onResume={onResumeSolve}
+                    />
+                  ))}
                 </div>
               </section>
             )}
 
-            {completed.length > 0 && (
+            {(standaloneCompleted.length > 0 || groupsCompleted.length > 0) && (
               <section className="solve-section">
                 <h2 className="solve-section__title">Past Solves</h2>
                 <div className="solve-grid">
-                  {completed.map((s) => (
+                  {standaloneCompleted.map((s) => (
                     <SolveCard
                       key={s.id}
                       solve={s}
                       onDelete={handleDelete}
                       onResume={() => {}}
+                    />
+                  ))}
+                  {groupsCompleted.map((group) => (
+                    <SheetCard
+                      key={group[0].groupId}
+                      groupSolves={group}
+                      onDeleteGroup={handleDeleteGroup}
+                      onResume={onResumeSolve}
                     />
                   ))}
                 </div>
@@ -220,14 +366,6 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
         )}
       </main>
 
-      {/* Tutor call modal */}
-      {showCall && (
-        <TutorCallModal
-          user={user}
-          solves={solves}
-          onClose={() => setShowCall(false)}
-        />
-      )}
     </div>
   )
 }

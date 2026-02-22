@@ -12,18 +12,22 @@
     "migrate:to-firebase": "node scripts/migrate-to-firebase.cjs",
     "update-firebase-metadata": "node scripts/update-firebase-metadata-schema.cjs",
     "set-topic-elo": "node scripts/set-topic-elo-1500.cjs",
-    "backfill-academic-level": "node scripts/backfill-academic-level.cjs"
+    "backfill-academic-level": "node scripts/backfill-academic-level.cjs",
+    "migrate:whiteboards": "node scripts/migrate-whiteboards-to-collection.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@excalidraw/excalidraw": "^0.17.6",
+    "canvas-confetti": "^1.9.4",
     "firebase": "^12.9.0",
+    "pdfjs-dist": "^5.4.624",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.13.0",
     "react-typed": "^2.0.12"
   },
   "devDependencies": {
+    "@types/canvas-confetti": "^1.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",

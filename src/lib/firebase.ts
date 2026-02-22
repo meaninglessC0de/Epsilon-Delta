@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app'
-import { getAuth, connectAuthEmulator } from 'firebase/auth'
+import { getAuth, connectAuthEmulator, setPersistence, browserLocalPersistence } from 'firebase/auth'
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore'
 
 const apiKey = import.meta.env.VITE_FIREBASE_API_KEY as string | undefined
@@ -33,6 +33,11 @@ if (!isFirebaseConfigured()) {
 const app = initializeApp(config)
 export const auth = getAuth(app)
 export const db = getFirestore(app)
+
+// Keep the user logged in on this device (localStorage/IndexedDB) until they sign out.
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn('Auth persistence could not be set:', err)
+})
 
 // Optional: use emulators in development
 const useEmulator = import.meta.env.VITE_FIREBASE_USE_EMULATOR === 'true'

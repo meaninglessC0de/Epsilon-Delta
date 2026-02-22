@@ -181,6 +181,27 @@ input {
   box-shadow: 0 4px 16px rgba(255, 109, 77, 0.35);
 }
 
+.btn--loading {
+  pointer-events: none;
+  position: relative;
+}
+
+.btn--loading .btn__spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: 6px;
+  vertical-align: -0.2em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.6s linear infinite;
+}
+
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
 .btn--ghost {
   background: transparent;
   color: var(--text-2);
@@ -190,6 +211,18 @@ input {
   background: var(--bg-alt);
   color: var(--text);
   border-color: var(--border-dark);
+}
+
+.btn--secondary {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: var(--border-dark);
+}
+
+.btn--secondary:not(:disabled):hover {
+  background: var(--surface);
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .btn--ghost.btn--active {
@@ -383,6 +416,10 @@ input {
   object-position: top left;
 }
 
+.solve-card__thumbnail--sheet {
+  background: linear-gradient(135deg, var(--primary-light) 0%, var(--bg-alt) 100%);
+}
+
 .solve-card__thumbnail--empty {
   display: flex;
   align-items: center;
@@ -471,6 +508,11 @@ input {
   border-color: var(--danger) !important;
 }
 
+.solve-card--sheet .solve-card__feedback {
+  color: var(--text-2);
+  font-size: 0.9rem;
+}
+
 /* ===== Empty state ===== */
 .empty-state {
   text-align: center;
@@ -537,6 +579,281 @@ input {
   line-height: 1.7;
 }
 
+.new-problem-page__mode {
+  display: flex;
+  gap: 0;
+  margin-bottom: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  width: fit-content;
+}
+
+.new-problem-page__mode-btn {
+  padding: 10px 20px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.new-problem-page__mode-btn:hover {
+  color: var(--text);
+  background: var(--bg-alt);
+}
+
+.new-problem-page__mode-btn--active {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+.new-problem-page__single-block {
+  margin-top: 8px;
+}
+
+.new-problem-page__cta {
+  margin-top: 24px;
+}
+
+.new-problem-page__sheet-block {
+  margin-top: 8px;
+}
+
+/* Single problem: textarea with small attach button on corner */
+.problem-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.problem-input-wrap__textarea {
+  display: block;
+  width: 100%;
+  padding-right: 48px;
+  padding-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.problem-input-wrap__actions {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.problem-input-wrap__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.problem-input-wrap__attach:hover {
+  background: var(--bg-alt);
+  border-color: var(--primary);
+}
+
+.problem-input-wrap__preview {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.problem-input-wrap__preview-img {
+  display: block;
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.problem-input-wrap__preview-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.problem-input-wrap__preview-remove:hover {
+  filter: brightness(1.1);
+}
+
+/* Sheet mode: compact upload row */
+.sheet-upload-row__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sheet-upload-row__badge {
+  font-size: 0.85rem;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sheet-upload-row__clear {
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.sheet-upload-row__clear:hover {
+  color: var(--danger);
+}
+
+.sheet-upload-row__thumb {
+  margin-top: 12px;
+  max-width: 280px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.sheet-upload-row__thumb img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Full-width dropzone for problem sheet (image or PDF) */
+.sheet-dropzone {
+  width: 100%;
+  min-height: 160px;
+  border: 2px dashed var(--border-dark);
+  border-radius: var(--radius-lg);
+  background: var(--bg-alt);
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.sheet-dropzone:hover,
+.sheet-dropzone--active {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.sheet-dropzone--has-file {
+  border-style: solid;
+  border-color: var(--border);
+  min-height: 200px;
+}
+
+.sheet-dropzone__placeholder {
+  text-align: center;
+  padding: 28px 24px;
+}
+
+.sheet-dropzone__icon {
+  font-size: 2rem;
+  display: block;
+  margin-bottom: 10px;
+}
+
+.sheet-dropzone__text {
+  font-size: 0.95rem;
+  color: var(--text-2);
+  margin: 0 0 4px;
+}
+
+.sheet-dropzone__text strong {
+  color: var(--text);
+}
+
+.sheet-dropzone__hint {
+  font-size: 0.8rem;
+  color: var(--text-3);
+  margin: 0;
+}
+
+.sheet-dropzone__preview {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  max-height: 320px;
+}
+
+.sheet-dropzone__overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sheet-dropzone__badge {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.sheet-dropzone__replace,
+.sheet-dropzone__remove {
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.sheet-dropzone__replace:hover,
+.sheet-dropzone__remove:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+.sheet-dropzone__remove {
+  margin-left: auto;
+}
+
+.sheet-questions__diagram-badge {
+  flex-shrink: 0;
+  font-size: 1rem;
+  margin-left: 4px;
+}
+
 /* ===== Form elements ===== */
 .form-group {
   margin-bottom: 24px;
@@ -578,6 +895,63 @@ input {
   margin-top: 6px;
   font-size: 0.78rem;
   color: var(--text-3);
+}
+
+.form-hint--error {
+  color: var(--danger);
+}
+
+.form-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid var(--border-dark);
+  border-radius: var(--radius);
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.form-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(255, 109, 77, 0.12);
+}
+
+.form-input::placeholder {
+  color: var(--text-4);
+}
+
+/* ===== Sheet questions list (New Problem page) ===== */
+.sheet-questions {
+  margin-top: 20px;
+}
+
+.sheet-questions__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.sheet-questions__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sheet-questions__num {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-2);
+  min-width: 28px;
+}
+
+.sheet-questions__input {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ===== Divider ===== */
@@ -714,6 +1088,63 @@ input {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  flex: 1;
+  max-width: 420px;
+}
+
+
+.wb-header__group-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.wb-group-nav__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.wb-group-nav__btn:hover:not(:disabled) {
+  background: var(--bg-alt);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.wb-group-nav__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wb-group-nav__label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-2);
+}
+
+.wb-group-nav__title {
+  font-size: 0.85rem;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.wb-header__group-nav-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .wb-header__problem-label {
@@ -729,10 +1160,14 @@ input {
   font-size: 0.85rem;
   color: var(--text);
   font-weight: 500;
-  white-space: nowrap;
+  line-height: 1.35;
+  margin: 2px 0 0;
   overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   text-overflow: ellipsis;
-  max-width: 340px;
+  cursor: default;
 }
 
 .wb-header__center {
@@ -847,6 +1282,7 @@ input {
 /* ===== Whiteboard body ===== */
 .wb-body {
   display: flex;
+  flex-direction: column;
   flex: 1;
   overflow: hidden;
   position: relative;
@@ -856,9 +1292,39 @@ input {
   flex: 1;
   position: relative;
   overflow: hidden;
+  min-height: 0;
+}
+
+/* Diagram as part of whiteboard (background layer; only for diagram-based questions) */
+.wb-canvas__diagram {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px;
+  pointer-events: none;
+}
+
+.wb-canvas__diagram img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.wb-canvas__board {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
 }
 
 /* Ensure Excalidraw fills container */
+.wb-canvas__board .excalidraw,
 .wb-canvas .excalidraw {
   position: absolute !important;
   inset: 0 !important;
@@ -866,9 +1332,16 @@ input {
   height: 100% !important;
 }
 
+.wb-canvas__board .excalidraw-container,
 .wb-canvas .excalidraw-container {
   width: 100% !important;
   height: 100% !important;
+}
+
+/* Hide Excalidraw library (sidebar) in whiteboard */
+.wb-canvas__board .excalidraw .sidebar-trigger,
+.whiteboard-page .excalidraw .sidebar-trigger {
+  display: none !important;
 }
 
 /* Error highlight overlay on canvas (when AI detects a mistake) */
@@ -1474,6 +1947,12 @@ input {
   flex-wrap: wrap;
 }
 
+/* AI mathematician name — gemini blue, bold (indicates AI tutor) */
+.dashboard-ai-name {
+  color: #4285f4;
+  font-weight: 700;
+}
+
 /* ===== Tutor call modal ===== */
 .tutor-overlay {
   position: fixed;
@@ -1596,6 +2075,143 @@ input {
   color: var(--text-3);
   font-style: italic;
   text-align: center;
+}
+
+/* ===== Chat page (tutor as separate page) ===== */
+.chat-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 24px 80px;
+}
+
+.chat-page__inner {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-page__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.chat-page__title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.chat-page__sub {
+  font-size: 0.85rem;
+  color: var(--text-2);
+  margin: 4px 0 0;
+}
+
+.chat-page__list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
+  scroll-behavior: smooth;
+}
+
+.chat-msg {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.chat-msg--user {
+  align-self: flex-end;
+  background: var(--primary);
+  color: var(--primary-fg);
+}
+
+.chat-msg--assistant {
+  align-self: flex-start;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.chat-msg--question {
+  border-left: 4px solid var(--primary);
+  background: linear-gradient(135deg, var(--bg-alt) 0%, color-mix(in srgb, var(--primary) 8%, var(--bg-alt)) 100%);
+}
+
+.chat-msg--interim {
+  opacity: 0.8;
+}
+
+.chat-msg__content {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-msg__equation {
+  margin-top: 10px;
+  padding: 10px 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-align: center;
+}
+
+.chat-msg__graph {
+  margin-top: 10px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.chat-graph-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chat-page__voice-only-hint {
+  font-size: 0.85rem;
+  color: var(--text-2);
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.chat-page__answer-btn {
+  width: 100%;
+  padding: 14px 20px;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.chat-page__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  align-items: center;
 }
 
 /* ===== Manim page ===== */

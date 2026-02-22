@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw'
-import type { FeedbackEntry, Solve } from '../types'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Excalidraw, exportToBlob, restore } from '@excalidraw/excalidraw'
+import type { FeedbackEntry, Solve, WhiteboardState } from '../types'
 import { auth } from '../lib/firebase'
-import { getSolveById, saveSolve } from '../lib/storage'
+import { getSolveById, saveSolve, saveWhiteboard, getWhiteboard, getSolvesByGroupId } from '../lib/storage'
 import { checkWorking, getFinalFeedback, refreshMemory } from '../lib/claude'
 import { getMemory, updateMemory, getMetadataForAgent } from '../lib/memory'
 import { incrementSolveCount, updateTopicElo } from '../lib/firebaseMetadata'
@@ -10,8 +11,14 @@ import { speakText, stopSpeaking } from '../lib/elevenlabs'
 
 /** How often to analyze the whiteboard (seconds). Use VITE_ANALYZE_INTERVAL in .env to override. */
 const ANALYZE_INTERVAL = parseInt(import.meta.env.VITE_ANALYZE_INTERVAL ?? '20', 10)
+/** Only show highlight when region area is below this (avoids full-board "highlight anything" bug). */
+const HIGHLIGHT_MAX_AREA = 0.7
 /** How long to show the error highlight overlay (ms) */
 const HIGHLIGHT_DURATION_MS = 6000
+/** Max dimension for image sent to AI (smaller = faster analysis). */
+const CHECK_IMAGE_MAX_DIM = 600
+/** How often to auto-persist whiteboard state to DB (ms). */
+const PERSIST_WHITEBOARD_INTERVAL_MS = 30_000
 
 interface Props {
   solve: Solve
@@ -29,6 +36,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   const excalidrawAPIRef = useRef<any>(null)
   const feedbackHistoryRef = useRef<FeedbackEntry[]>(solve.feedbackHistory)
   const isCheckingRef = useRef(false)
+  const lastCheckedSignatureRef = useRef<string | null>(null)
   const isMutedRef = useRef(false)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Guards against speakText being called after the component has unmounted.
@@ -42,18 +50,25 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   const [showToast, setShowToast] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [isNavigating, setIsNavigating] = useState(false)
   const [isFinishing, setIsFinishing] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [sessionSeconds, setSessionSeconds] = useState(0)
-  const [nextCheckIn, setNextCheckIn] = useState(ANALYZE_INTERVAL)
   const [checkError, setCheckError] = useState<string | null>(null)
   const [highlightRegion, setHighlightRegion] = useState<FeedbackEntry['highlightRegion']>(null)
-  const [commentLogOpen, setCommentLogOpen] = useState(true)
-  const [logEntries, setLogEntries] = useState<FeedbackEntry[]>(() =>
-    solve.feedbackHistory.filter((e) => !e.isCorrect),
-  )
+  const [groupSolves, setGroupSolves] = useState<Solve[]>([])
+  const navigate = useNavigate()
 
   useEffect(() => { isMutedRef.current = isMuted }, [isMuted])
+
+  useEffect(() => {
+    if (!solve.groupId) return
+    let cancelled = false
+    getSolvesByGroupId(solve.groupId).then((list) => {
+      if (!cancelled) setGroupSolves(list)
+    })
+    return () => { cancelled = true }
+  }, [solve.groupId])
 
   // Stop audio on unmount (React navigation) AND on browser tab close/hide.
   // The pagehide/beforeunload handlers catch the case where the ElevenLabs fetch
@@ -82,21 +97,27 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     return () => clearInterval(t)
   }, [])
 
-  const captureCanvas = useCallback(async (): Promise<string | null> => {
+  const captureCanvas = useCallback(async (opts?: { forCheck?: boolean }): Promise<string | null> => {
     const api = excalidrawAPIRef.current
     const container = canvasContainerRef.current
     if (!api || !container) return null
     try {
       const rect = container.getBoundingClientRect()
-      const w = Math.max(1, Math.round(rect.width))
-      const h = Math.max(1, Math.round(rect.height))
+      let w = Math.max(1, Math.round(rect.width))
+      let h = Math.max(1, Math.round(rect.height))
+      if (opts?.forCheck && Math.max(w, h) > CHECK_IMAGE_MAX_DIM) {
+        const scale = CHECK_IMAGE_MAX_DIM / Math.max(w, h)
+        w = Math.round(w * scale)
+        h = Math.round(h * scale)
+      }
+      const quality = opts?.forCheck ? 0.5 : 0.8
       const blob = await exportToBlob({
         elements: api.getSceneElements(),
         appState: { ...api.getAppState(), exportBackground: true, exportWithDarkMode: false },
         files: api.getFiles(),
         getDimensions: () => ({ width: w, height: h }),
         mimeType: 'image/jpeg',
-        quality: 0.8,
+        quality,
       })
       return new Promise((resolve, reject) => {
         const reader = new FileReader()
@@ -110,20 +131,82 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     }
   }, [])
 
+  /** Get current scene for DB persist (elements + appState). */
+  const getWhiteboardState = useCallback((): { elements: unknown[]; appState: Record<string, unknown> } | null => {
+    const api = excalidrawAPIRef.current
+    if (!api) return null
+    const elements = api.getSceneElements()
+    const appState = api.getAppState() as Record<string, unknown>
+    return { elements: [...elements], appState: { ...appState } }
+  }, [])
+
+  /** Save whiteboard state and update solve.finalWorking (for dashboard thumbnail). */
+  const saveCurrentBoard = useCallback(async () => {
+    const state = getWhiteboardState()
+    const base64 = await captureCanvas()
+    if (state) await saveWhiteboard(solve.id, state)
+    const current = await getSolveById(solve.id)
+    if (!current) return
+    if (base64) current.finalWorking = base64
+    current.feedbackHistory = [...feedbackHistoryRef.current]
+    await saveSolve(current)
+  }, [getWhiteboardState, captureCanvas, solve.id])
+
+  const persistWhiteboardState = useCallback(async () => {
+    await saveCurrentBoard()
+  }, [saveCurrentBoard])
+
+  // Auto-persist whiteboard to DB so user can resume
+  useEffect(() => {
+    const t = setInterval(persistWhiteboardState, PERSIST_WHITEBOARD_INTERVAL_MS)
+    return () => clearInterval(t)
+  }, [persistWhiteboardState])
+
   const performCheck = useCallback(async () => {
     if (isCheckingRef.current) return
+    const api = excalidrawAPIRef.current
+    if (!api) return
+    const elements = api.getSceneElements()
+    const signature = [
+      elements.length,
+      ...elements
+        .map((e: { id: string; version?: number; versionNonce?: number }) =>
+          `${e.id}:${e.version ?? (e as { versionNonce?: number }).versionNonce ?? 0}`,
+        )
+        .sort(),
+    ].join('|')
+    if (signature === lastCheckedSignatureRef.current) return
+
     isCheckingRef.current = true
     setIsChecking(true)
     setCheckError(null)
 
     try {
-      const base64 = await captureCanvas()
+      const base64 = await captureCanvas({ forCheck: true })
       if (!base64) return
 
       const lastFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]?.feedback
       const agentMeta = await getMetadataForAgent()
       const result = await checkWorking(solve.problem, base64, lastFeedback, agentMeta?.contextString)
 
+      // Only mark complete when isCorrect (fully solved and correct). Incomplete = no alert, no exit.
+      if (result.isCorrect) {
+        lastCheckedSignatureRef.current = signature
+        setHighlightRegion(null)
+        if (isMountedRef.current) {
+          handleFinishRef.current()
+        }
+        return
+      }
+
+      // Incomplete (not finished): no alert, no toast, no TTS — just keep working
+      if (result.isIncomplete) {
+        lastCheckedSignatureRef.current = signature
+        setHighlightRegion(null)
+        return
+      }
+
+      // Objectively wrong: show feedback, toast, TTS, highlight
       const entry: FeedbackEntry = {
         id: crypto.randomUUID(),
         timestamp: Date.now(),
@@ -137,39 +220,32 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       }
 
       feedbackHistoryRef.current = [...feedbackHistoryRef.current, entry]
-      if (!entry.isCorrect) setLogEntries((prev) => [...prev, entry])
       setLatestFeedback(entry)
       setShowToast(true)
 
-      // Auto-dismiss toast after 12 seconds
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
       toastTimerRef.current = setTimeout(() => setShowToast(false), 12000)
 
-      // When wrong: show highlight on whiteboard, then clear after duration
-      if (!result.isCorrect && result.highlightRegion) {
-        setHighlightRegion(result.highlightRegion)
+      const region = result.highlightRegion
+      const area = region ? region.width * region.height : 0
+      if (region && area > 0 && area < HIGHLIGHT_MAX_AREA) {
+        setHighlightRegion(region)
         setTimeout(() => setHighlightRegion(null), HIGHLIGHT_DURATION_MS)
       } else {
         setHighlightRegion(null)
       }
 
-      // Persist
       const current = await getSolveById(solve.id)
       if (current) {
         current.feedbackHistory.push(entry)
         await saveSolve(current)
       }
 
-      // Only speak when something is wrong — summarized version for ElevenLabs
-      if (isMountedRef.current && !isMutedRef.current && !result.isCorrect) {
-        const toSpeak = result.speakSummary || result.feedback
-        speakText(toSpeak).catch(console.error)
+      if (isMountedRef.current && !isMutedRef.current && result.speakSummary) {
+        speakText(result.speakSummary).catch(console.error)
       }
 
-      // Auto-complete and navigate when the answer is correct
-      if (result.isCorrect && isMountedRef.current) {
-        handleFinishRef.current()
-      }
+      lastCheckedSignatureRef.current = signature
     } catch (err) {
       console.error('Check error:', err)
       setCheckError(err instanceof Error ? err.message : 'Failed to check work')
@@ -179,40 +255,47 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     }
   }, [captureCanvas, solve.id, solve.problem])
 
-  // Countdown + periodic trigger.
-  // Fire the API call PREFETCH_OFFSET seconds before the timer hits zero so that
-  // the ~6-7s response arrives just as the counter resets — feedback appears at zero.
-  const PREFETCH_OFFSET = Math.min(4, Math.floor(ANALYZE_INTERVAL / 2))
+  // Periodic check every ANALYZE_INTERVAL seconds (no countdown UI).
   useEffect(() => {
-    const t = setInterval(() => {
-      setNextCheckIn((n) => {
-        if (n === PREFETCH_OFFSET) {
-          performCheck()
-        }
-        if (n <= 1) {
-          return ANALYZE_INTERVAL
-        }
-        return n - 1
-      })
-    }, 1000)
+    const t = setInterval(performCheck, ANALYZE_INTERVAL * 1000)
     return () => clearInterval(t)
   }, [performCheck])
 
+  // Save: run a check first. If correct, mark completed and finish; otherwise persist and quit without completing.
   const handleSave = useCallback(async () => {
     if (isSaving) return
     setIsSaving(true)
+    setCheckError(null)
     try {
-      const base64 = await captureCanvas()
+      const base64 = await captureCanvas({ forCheck: true })
+      if (!base64) {
+        setIsSaving(false)
+        return
+      }
+      const lastFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]?.feedback
+      const agentMeta = await getMetadataForAgent()
+      const result = await checkWorking(solve.problem, base64, lastFeedback, agentMeta?.contextString)
+
+      if (result.isCorrect && isMountedRef.current) {
+        handleFinishRef.current()
+        return
+      }
+
       const current = (await getSolveById(solve.id)) ?? solve
-      if (base64) current.finalWorking = base64
       current.feedbackHistory = [...feedbackHistoryRef.current]
+      const fullRes = await captureCanvas()
+      if (fullRes) current.finalWorking = fullRes
       await saveSolve(current)
+      const state = getWhiteboardState()
+      if (state) await saveWhiteboard(solve.id, state)
+      onFinish()
     } catch (err) {
       console.error('Save error:', err)
+      setCheckError(err instanceof Error ? err.message : 'Save failed')
     } finally {
       setIsSaving(false)
     }
-  }, [captureCanvas, isSaving, solve.id])
+  }, [captureCanvas, getWhiteboardState, isSaving, solve.id, solve.problem, onFinish])
 
   const handleFinish = useCallback(async () => {
     if (isFinishing) return
@@ -232,6 +315,8 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     if (base64) current.finalWorking = base64
     current.finalFeedback = lastFeedback?.feedback ?? 'Session completed.'
     await saveSolve(current)
+    const state = getWhiteboardState()
+    if (state) await saveWhiteboard(solve.id, state)
 
     onFinish() // navigate away immediately
 
@@ -262,53 +347,149 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         })
         .catch(console.error)
     }
-  }, [captureCanvas, isFinishing, onFinish, solve])
+  }, [captureCanvas, getWhiteboardState, isFinishing, onFinish, solve])
 
   useEffect(() => {
     handleFinishRef.current = handleFinish
   }, [handleFinish])
 
-  const circumference = 2 * Math.PI * 14
-  const dashOffset = circumference * (nextCheckIn / ANALYZE_INTERVAL)
+  const currentIndex = solve.questionIndex ?? 0
+  const totalInGroup = groupSolves.length || (solve.questionCount ?? 1)
+
+  const defaultAppState = useMemo(
+    () => ({
+      viewBackgroundColor: '#ffffff',
+      currentItemFontFamily: 1,
+      elementType: 'freedraw' as const,
+    }),
+    [],
+  )
+  const initialData = useMemo(() => ({ appState: defaultAppState }), [defaultAppState])
+
+  // Load whiteboard from DB (or legacy), then render previous work via API. Only update elements to avoid resetting viewport.
+  const appliedForSolveRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (solve.status !== 'active') return
+    const solveKey = solve.id
+    let cancelled = false
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const clearTimeouts = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+    }
+    getWhiteboard(solve.id)
+      .then((ws) => {
+        if (cancelled) return
+        const data = ws ?? (solve.whiteboardState?.elements?.length ? solve.whiteboardState : null)
+        if (!data?.elements?.length) return
+        try {
+          const restored = restore(
+            { elements: data.elements, appState: (data.appState || {}) as Record<string, unknown>, files: {} },
+            null,
+            null,
+          )
+          const tryApply = (attempt = 0): boolean => {
+            const api = excalidrawAPIRef.current
+            if (!api) return false
+            if (appliedForSolveRef.current === solveKey) return true
+            api.updateScene({
+              elements: restored.elements,
+              commitToHistory: false,
+            })
+            appliedForSolveRef.current = solveKey
+            return true
+          }
+          if (!tryApply() && !cancelled) {
+            const maxAttempts = 20
+            const step = 100
+            let attempts = 0
+            const schedule = () => {
+              if (cancelled || attempts >= maxAttempts) return
+              timeoutId = setTimeout(() => {
+                timeoutId = null
+                attempts++
+                if (tryApply() || cancelled) return
+                schedule()
+              }, step)
+            }
+            schedule()
+          }
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(console.error)
+    return () => {
+      cancelled = true
+      clearTimeouts()
+      appliedForSolveRef.current = null
+    }
+  }, [solve.id, solve.status])
 
   return (
     <div className="whiteboard-page">
       <header className="wb-header">
         <div className="wb-header__problem">
           <span className="wb-header__problem-label">Problem</span>
-          <span className="wb-header__problem-text">
-            {solve.problem.length > 90 ? solve.problem.slice(0, 90) + '…' : solve.problem}
-          </span>
-        </div>
-
-        <div className="wb-header__center">
-          <button
-            className={`check-ring ${isChecking ? 'check-ring--active' : ''}`}
-            onClick={performCheck}
-            title="Click to check now"
-            disabled={isChecking}
+          <p
+            className="wb-header__problem-text"
+            title={solve.problem}
           >
-            <svg viewBox="0 0 32 32" width="38" height="38">
-              <circle cx="16" cy="16" r="14" className="check-ring__track" />
-              <circle
-                cx="16" cy="16" r="14"
-                className="check-ring__progress"
-                style={{
-                  strokeDasharray: circumference,
-                  strokeDashoffset: dashOffset,
-                  transform: 'rotate(-90deg)',
-                  transformOrigin: '50% 50%',
-                }}
-              />
-            </svg>
-            <span className="check-ring__label">{isChecking ? '…' : `${nextCheckIn}s`}</span>
-          </button>
-          <span className="wb-header__status">
-            {isChecking ? 'Analyzing…' : `Next check in ${nextCheckIn}s`}
-          </span>
+            {solve.problem}
+          </p>
         </div>
 
         <div className="wb-header__right">
+          {groupSolves.length > 0 && (
+            <div className="wb-header__group-nav-inline">
+              <button
+                type="button"
+                className="wb-group-nav__btn"
+                disabled={currentIndex <= 0 || isNavigating}
+                onClick={async () => {
+                  const prev = groupSolves[currentIndex - 1]
+                  if (!prev) return
+                  setIsNavigating(true)
+                  try {
+                    await saveCurrentBoard()
+                    navigate(`/solve/${prev.id}`, { replace: true })
+                  } finally {
+                    setIsNavigating(false)
+                  }
+                }}
+                aria-label="Previous question"
+              >
+                ←
+              </button>
+              <span className="wb-group-nav__label">
+                {currentIndex + 1}/{totalInGroup}
+              </span>
+              <button
+                type="button"
+                className="wb-group-nav__btn"
+                disabled={currentIndex >= totalInGroup - 1 || isNavigating}
+                onClick={async () => {
+                  const next = groupSolves[currentIndex + 1]
+                  if (!next) return
+                  setIsNavigating(true)
+                  try {
+                    await saveCurrentBoard()
+                    navigate(`/solve/${next.id}`, { replace: true })
+                  } finally {
+                    setIsNavigating(false)
+                  }
+                }}
+                aria-label="Next question"
+              >
+                →
+              </button>
+              {solve.sheetTitle && (
+                <span className="wb-group-nav__title">{solve.sheetTitle}</span>
+              )}
+            </div>
+          )}
           <span className="wb-header__timer">{formatTime(sessionSeconds)}</span>
 
           <button
@@ -320,19 +501,18 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
           </button>
 
           <button
-            className="btn btn--primary btn--sm"
+            className={`btn btn--primary btn--sm ${isSaving ? 'btn--loading' : ''}`}
             onClick={handleSave}
             disabled={isSaving}
           >
-            {isSaving ? 'Saving…' : 'Save'}
-          </button>
-          <button
-            className="btn btn--ghost btn--sm"
-            onClick={handleFinish}
-            disabled={isFinishing}
-            title="End session and go home"
-          >
-            End session
+            {isSaving ? (
+              <>
+                <span className="btn__spinner" aria-hidden />
+                Saving…
+              </>
+            ) : (
+              'Save'
+            )}
           </button>
         </div>
       </header>
@@ -346,11 +526,19 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
 
       <div className="wb-body">
         <div className="wb-canvas" ref={canvasContainerRef}>
+          {solve.problemImage && (
+            <div className="wb-canvas__diagram" aria-hidden>
+              <img src={`data:image/jpeg;base64,${solve.problemImage}`} alt="Problem diagram" />
+            </div>
+          )}
+          <div className="wb-canvas__board">
           <Excalidraw
+            key={`whiteboard-${solve.id}`}
             excalidrawAPI={(api) => { excalidrawAPIRef.current = api }}
-            initialData={{ appState: { viewBackgroundColor: '#ffffff', currentItemFontFamily: 1 } }}
+            initialData={initialData}
             UIOptions={{ canvasActions: { saveToActiveFile: false, loadScene: false, export: false } }}
           />
+          </div>
 
           {/* Error highlight overlay — shows region where AI detected a mistake */}
           {highlightRegion && (
@@ -382,42 +570,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
             </div>
           )}
 
-          {/* Problem image thumbnail (if uploaded) */}
-          {solve.problemImage && (
-            <div className="wb-problem-thumb">
-              <img src={`data:image/jpeg;base64,${solve.problemImage}`} alt="Problem" />
-            </div>
-          )}
-        </div>
-
-        {/* Comment log — AI observations over time */}
-        <aside className={`wb-log ${commentLogOpen ? 'wb-log--open' : ''}`}>
-          <button
-            type="button"
-            className="wb-log__toggle"
-            onClick={() => setCommentLogOpen((o) => !o)}
-            aria-expanded={commentLogOpen}
-          >
-            📋 Comment log {logEntries.length > 0 && <span className="wb-log__count">{logEntries.length}</span>}
-          </button>
-          {commentLogOpen && (
-            <ul className="wb-log__list">
-              {logEntries.length === 0 ? (
-                <li className="wb-log__empty">Analysis runs every {ANALYZE_INTERVAL}s. Feedback appears here only when something needs fixing.</li>
-              ) : (
-                [...logEntries].reverse().map((entry) => (
-                  <li key={entry.id} className="wb-log__entry wb-log__entry--hint">
-                    <span className="wb-log__time">
-                      {formatTime(Math.max(0, Math.floor((entry.timestamp - solve.createdAt) / 1000)))}
-                    </span>
-                    <span className="wb-log__badge">💡</span>
-                    <p className="wb-log__text">{entry.feedback}</p>
-                  </li>
-                ))
-              )}
-            </ul>
-          )}
-        </aside>
+          </div>
       </div>
     </div>
   )
