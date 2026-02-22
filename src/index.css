@@ -573,10 +573,16 @@ input {
 
 .solve-card__footer {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
+}
+
+.solve-card__stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .solve-card__stat {
@@ -585,8 +591,8 @@ input {
 }
 
 .solve-card__actions {
-  margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 

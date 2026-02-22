@@ -355,6 +355,24 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     }
   }, [captureCanvas, getWhiteboardState, isSaving, solve.id, solve.problem, onFinish])
 
+  const handleMarkSolved = useCallback(async () => {
+    if (isFinishing) return
+    setIsFinishing(true)
+    stopSpeaking()
+    setShowToast(false)
+    const base64 = await captureCanvas()
+    const current = (await getSolveById(solve.id)) ?? { ...solve }
+    current.completedAt = Date.now()
+    current.status = 'completed'
+    if (base64) current.finalWorking = base64
+    current.finalFeedback = feedbackHistoryRef.current[feedbackHistoryRef.current.length - 1]?.feedback ?? 'Marked as solved.'
+    current.feedbackHistory = [...feedbackHistoryRef.current]
+    await saveSolve(current)
+    const state = getWhiteboardState()
+    if (state) await saveWhiteboard(solve.id, state)
+    onFinish()
+  }, [captureCanvas, getWhiteboardState, isFinishing, onFinish, solve])
+
   const handleFinish = useCallback(async () => {
     if (isFinishing) return
     setIsFinishing(true)
@@ -557,6 +575,15 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
             title={isMuted ? 'Unmute' : 'Mute'}
           >
             {isMuted ? '🔇' : '🔊'}
+          </button>
+
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={handleMarkSolved}
+            disabled={isFinishing}
+            title="Mark this problem as solved and return to dashboard"
+          >
+            Mark solved
           </button>
 
           <button

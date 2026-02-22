@@ -45,6 +45,7 @@ function SolveCard({
   onResumeDisabled?: boolean
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const isActive = solve.status === 'active' || solve.status === 'incorrect'
 
   return (
     <article className="solve-card dashboard-card">
@@ -79,13 +80,15 @@ function SolveCard({
         )}
 
         <div className="solve-card__footer">
-          <span className="solve-card__stat">⏱ {formatDuration(solve.createdAt, solve.completedAt)}</span>
-          <span className="solve-card__stat">
-            💬 {solve.feedbackHistory.length} check{solve.feedbackHistory.length !== 1 ? 's' : ''}
-          </span>
+          <div className="solve-card__stats">
+            <span className="solve-card__stat">⏱ {formatDuration(solve.createdAt, solve.completedAt)}</span>
+            <span className="solve-card__stat">
+              💬 {solve.feedbackHistory.length} check{solve.feedbackHistory.length !== 1 ? 's' : ''}
+            </span>
+          </div>
 
           <div className="solve-card__actions">
-            {(solve.status === 'active' || solve.status === 'incorrect') && !onResumeDisabled && (
+            {isActive && !onResumeDisabled && (
               <button className="btn btn--ghost btn--sm" onClick={() => onResume(solve.id)}>
                 Resume
               </button>
@@ -400,7 +403,7 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
                     <section className="solve-section dashboard-section">
                       <h2 className="solve-section__title">In Progress</h2>
                       <div className="solve-grid">
-                        {standaloneActive.map((s, i) => (
+                        {standaloneActive.map((s) => (
                           <SolveCard
                             key={s.id}
                             solve={s}
