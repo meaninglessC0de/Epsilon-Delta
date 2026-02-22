@@ -6,11 +6,12 @@ import { auth } from '../lib/firebase'
 import { getSolveById, saveSolve, saveWhiteboard, getWhiteboard, getSolvesByGroupId } from '../lib/storage'
 import { checkWorking, getFinalFeedback, refreshMemory } from '../lib/claude'
 import { getMemory, updateMemory, getMetadataForAgent } from '../lib/memory'
-import { incrementSolveCount, updateTopicElo } from '../lib/firebaseMetadata'
+import { incrementSolveCount, updateTopicElo, recordUserInput } from '../lib/firebaseMetadata'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
+import { useDevelopmentProgress } from '../lib/developmentProgressToast'
 
 /** How often to analyze the whiteboard (seconds). Use VITE_ANALYZE_INTERVAL in .env to override. */
-const ANALYZE_INTERVAL = parseInt(import.meta.env.VITE_ANALYZE_INTERVAL ?? '20', 10)
+const ANALYZE_INTERVAL = Math.max(5, Math.min(120, parseInt(import.meta.env.VITE_ANALYZE_INTERVAL ?? '20', 10) || 20))
 /** Only show highlight when region area is below this (avoids full-board "highlight anything" bug). */
 const HIGHLIGHT_MAX_AREA = 0.7
 /** How long to show the error highlight overlay (ms) */
@@ -36,7 +37,9 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   const excalidrawAPIRef = useRef<any>(null)
   const feedbackHistoryRef = useRef<FeedbackEntry[]>(solve.feedbackHistory)
   const isCheckingRef = useRef(false)
+  const pendingCheckRef = useRef(false)
   const lastCheckedSignatureRef = useRef<string | null>(null)
+  const lastFeedbackSignatureRef = useRef<string | null>(null)
   const isMutedRef = useRef(false)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Guards against speakText being called after the component has unmounted.
@@ -58,6 +61,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   const [highlightRegion, setHighlightRegion] = useState<FeedbackEntry['highlightRegion']>(null)
   const [groupSolves, setGroupSolves] = useState<Solve[]>([])
   const navigate = useNavigate()
+  const showProgress = useDevelopmentProgress()
 
   useEffect(() => { isMutedRef.current = isMuted }, [isMuted])
 
@@ -105,6 +109,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       const rect = container.getBoundingClientRect()
       let w = Math.max(1, Math.round(rect.width))
       let h = Math.max(1, Math.round(rect.height))
+      if (opts?.forCheck && (w < 50 || h < 50)) return null
       if (opts?.forCheck && Math.max(w, h) > CHECK_IMAGE_MAX_DIM) {
         const scale = CHECK_IMAGE_MAX_DIM / Math.max(w, h)
         w = Math.round(w * scale)
@@ -162,8 +167,11 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
     return () => clearInterval(t)
   }, [persistWhiteboardState])
 
-  const performCheck = useCallback(async () => {
-    if (isCheckingRef.current) return
+  const performCheck = useCallback(async (force = false) => {
+    if (isCheckingRef.current) {
+      if (force) pendingCheckRef.current = true
+      return
+    }
     const api = excalidrawAPIRef.current
     if (!api) return
     const elements = api.getSceneElements()
@@ -175,7 +183,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         )
         .sort(),
     ].join('|')
-    if (signature === lastCheckedSignatureRef.current) return
+    if (!force && signature === lastCheckedSignatureRef.current) return
 
     isCheckingRef.current = true
     setIsChecking(true)
@@ -206,7 +214,12 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         return
       }
 
-      // Objectively wrong: show feedback, toast, TTS, highlight
+      // Objectively wrong: only show feedback if we haven't already for this state (don't repeat)
+      if (signature === lastFeedbackSignatureRef.current) {
+        lastCheckedSignatureRef.current = signature
+        return
+      }
+
       const entry: FeedbackEntry = {
         id: crypto.randomUUID(),
         timestamp: Date.now(),
@@ -245,23 +258,40 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
         speakText(result.speakSummary).catch(console.error)
       }
 
+      const uid = auth.currentUser?.uid
+      if (uid) {
+        recordUserInput(uid, 'whiteboard', solve.problem).catch(console.error)
+        showProgress('Learning from your progress')
+      }
+
       lastCheckedSignatureRef.current = signature
+      lastFeedbackSignatureRef.current = signature
     } catch (err) {
       console.error('Check error:', err)
       setCheckError(err instanceof Error ? err.message : 'Failed to check work')
     } finally {
       setIsChecking(false)
       isCheckingRef.current = false
+      if (pendingCheckRef.current) {
+        pendingCheckRef.current = false
+        setTimeout(() => performCheck(true), 500)
+      }
     }
-  }, [captureCanvas, solve.id, solve.problem])
+  }, [captureCanvas, solve.id, solve.problem, showProgress])
 
-  // Periodic check every ANALYZE_INTERVAL seconds (no countdown UI).
+  // Periodic check every ANALYZE_INTERVAL seconds. Always run (force=true) so we check regardless of signature.
+  // If a check is already in progress when the interval fires, we set pendingCheckRef so it runs as soon as the current one finishes.
   useEffect(() => {
-    const t = setInterval(performCheck, ANALYZE_INTERVAL * 1000)
-    return () => clearInterval(t)
+    const runCheck = () => performCheck(true)
+    const initial = setTimeout(runCheck, 8000)
+    const t = setInterval(runCheck, ANALYZE_INTERVAL * 1000)
+    return () => {
+      clearTimeout(initial)
+      clearInterval(t)
+    }
   }, [performCheck])
 
-  // Save: run a check first. If correct, mark completed and finish; otherwise persist and quit without completing.
+  // Save: run a check first. If correct, mark completed and finish; if incorrect, set status and save; else persist as active.
   const handleSave = useCallback(async () => {
     if (isSaving) return
     setIsSaving(true)
@@ -285,10 +315,40 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
       current.feedbackHistory = [...feedbackHistoryRef.current]
       const fullRes = await captureCanvas()
       if (fullRes) current.finalWorking = fullRes
+
+      // Objectively incorrect (wrong step/answer): set status to incorrect and show feedback before exiting
+      if (!result.isIncomplete) {
+        const entry: FeedbackEntry = {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          feedback: result.feedback,
+          snapshot: base64,
+          isCorrect: false,
+          hints: result.hints,
+          encouragement: result.encouragement,
+          speakSummary: result.speakSummary,
+          highlightRegion: result.highlightRegion,
+        }
+        current.feedbackHistory.push(entry)
+        current.status = 'incorrect'
+        current.completedAt = Date.now()
+        current.finalFeedback = result.feedback
+        setLatestFeedback(entry)
+        setShowToast(true)
+        if (isMountedRef.current && !isMutedRef.current && result.speakSummary) {
+          speakText(result.speakSummary).catch(console.error)
+        }
+      }
+
       await saveSolve(current)
       const state = getWhiteboardState()
       if (state) await saveWhiteboard(solve.id, state)
-      onFinish()
+
+      if (!result.isIncomplete) {
+        setTimeout(() => { if (isMountedRef.current) onFinish() }, 2500)
+      } else {
+        onFinish()
+      }
     } catch (err) {
       console.error('Save error:', err)
       setCheckError(err instanceof Error ? err.message : 'Save failed')
@@ -369,7 +429,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
   // Load whiteboard from DB (or legacy), then render previous work via API. Only update elements to avoid resetting viewport.
   const appliedForSolveRef = useRef<string | null>(null)
   useEffect(() => {
-    if (solve.status !== 'active') return
+    if (solve.status !== 'active' && solve.status !== 'incorrect') return
     const solveKey = solve.id
     let cancelled = false
     let timeoutId: ReturnType<typeof setTimeout> | null = null
@@ -534,7 +594,7 @@ export function WhiteboardPage({ solve, onFinish }: Props) {
           <div className="wb-canvas__board">
           <Excalidraw
             key={`whiteboard-${solve.id}`}
-            excalidrawAPI={(api) => { excalidrawAPIRef.current = api }}
+            excalidrawAPI={(api) => { if (api) excalidrawAPIRef.current = api }}
             initialData={initialData}
             UIOptions={{ canvasActions: { saveToActiveFile: false, loadScene: false, export: false } }}
           />

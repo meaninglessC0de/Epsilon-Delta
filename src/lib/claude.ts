@@ -1,4 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
+import type { UserMetadata, Solve } from '../../shared/types'
+import { metadataToAgentContextString } from './firebaseMetadata'
 
 function getClient() {
   const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined
@@ -80,29 +82,32 @@ export async function checkWorking(
     : ''
 
   // Giving Claude an exact example is the most reliable way to get back pure JSON.
-  const prompt = `You are a maths tutor reviewing a student's handwritten work.
+  const prompt = `You are a maths tutor reviewing handwritten whiteboard work in real time. Every 20 seconds the current board is sent. Analyze what the student has written — focus on the problem, parse their steps and notation.
+
 Problem: "${problem}"${previousFeedback ? `\nPrevious feedback: "${previousFeedback}"` : ''}${personalisation}
 
-Look at the image and reply with ONLY a raw JSON object — no markdown, no code fences, no explanation. Use exactly this shape (all keys required; speakSummary, highlightRegion, isIncomplete only when isCorrect is false):
-{"feedback":"1-2 sentences.","isCorrect":false,"hints":["one concrete next step if wrong, else empty"],"encouragement":"Short phrase.","speakSummary":"When objectively wrong only: one short sentence for voice.","highlightRegion":{"x":0.1,"y":0.2,"width":0.4,"height":0.25},"isIncomplete":true}
+PARSING: Read handwritten digits and symbols carefully. Watch for 0 vs O, 1 vs l, 5 vs S, + vs ×. Infer intent from context and layout (left-to-right, top-to-bottom). If the board is mostly blank, doodles, illegible, or unrelated to the problem — treat as incomplete and say nothing.
 
-CRITICAL — when to set isCorrect to true (mark as COMPLETE and correct):
-- Set isCorrect to true ONLY when the problem is FULLY SOLVED: the student has reached a final answer, shown all steps, and the answer is correct. The work must be complete — not mid-solution, not a partial attempt, not "almost there".
-- If the board is blank, mostly empty, work in progress, or the student has not reached a final answer, set isCorrect to false.
+SILENCE RULE: Only provide feedback (speakSummary) when you have identified a CLEAR, OBJECTIVE mathematical error. If the work is correct so far, incomplete, illegible, or ambiguous — set isIncomplete to true and omit speakSummary. The app will stay silent. Do NOT comment on correct work or uncertain cases.
 
-CRITICAL — when isCorrect is false, set isIncomplete:
-- Set isIncomplete to true when the work is not finished (blank, partial, in progress, no final answer yet). Do not provide speakSummary or highlightRegion for incomplete work — the app will not show an alert.
-- Set isIncomplete to false (or omit) when there is an OBJECTIVE mathematical error: wrong step, wrong answer, wrong sign, wrong formula. Then provide feedback, hints, speakSummary, and optionally highlightRegion so the app can show an alert.
+REQUIRED: Reply with ONLY a raw JSON object — no markdown, no code fences. Use exactly this shape:
+{"feedback":"1-2 sentences.","isCorrect":false,"hints":["concrete next step if wrong else empty"],"encouragement":"Short phrase.","speakSummary":"Only when you identified a specific mathematical error.","highlightRegion":{"x":0.1,"y":0.2,"width":0.4,"height":0.25},"isIncomplete":true}
 
-highlightRegion: only when isCorrect is false AND isIncomplete is false. Use a small region (0-1 fractions). Omit if unsure.
+speakSummary: Only when isIncomplete is false (clear math error). Explain the specific mistake in plain words (e.g. "You added instead of subtracting — it should be 5 minus 2, which is 3"). No vague phrases.
 
-OTHER RULES:
-1. Return ONLY the raw JSON object. No extra text, no code fences, no markdown.
-2. Write ALL mathematics in plain English words only. Never use symbols like +, -, =, ×, ÷, ^, ², √, π, <, >, or any LaTeX.`
+CRITICAL — when to set isIncomplete:
+- Set isIncomplete to true (say nothing) when: work in progress, blank, illegible, doodles, unexpected input, or you are unsure. Do NOT provide speakSummary.
+- Set isIncomplete to false (give feedback) ONLY when you have identified a definite mathematical error: wrong step, wrong arithmetic, wrong sign, wrong formula, wrong answer. Then provide speakSummary.
+
+CRITICAL — isCorrect: true ONLY when the problem is fully solved and completely correct. Otherwise false.
+
+highlightRegion: only when isCorrect is false AND isIncomplete is false. Use small 0-1 fractions. Omit if unsure.
+
+OTHER: Return ONLY the raw JSON. Write all maths in plain English words — no symbols like +, -, =, ×, ÷, ^, ², √, π.`
 
   const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 180,
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 220,
     messages: [
       {
         role: 'user',
@@ -274,11 +279,15 @@ export type TutorContext = {
   solves: Array<{ problem: string; status: string; finalFeedback?: string }>
   memory?: { topicsCovered: string[]; weaknesses: string[]; solveSummaries: string[] }
   userContext?: string
+  /** Summarised recent conversations for continuity across sessions */
+  previousConversationContext?: string
 }
 
 function buildTutorContext(context: TutorContext) {
   const name = context.userName ? `The student's name is ${context.userName}.` : ''
   const memorySections: string[] = []
+  if (context.previousConversationContext)
+    memorySections.push(`Previous sessions with this student:\n${context.previousConversationContext}`)
   if (context.userContext) memorySections.push(`Student profile: ${context.userContext}`)
   if (context.memory) {
     const { topicsCovered, weaknesses, solveSummaries } = context.memory
@@ -335,8 +344,9 @@ ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
 Reply with a JSON object only: {"content":"...","speak":"...","isQuestion":false,"equation":"optional","graph":"optional"}
 
 - speak: What to say aloud (TTS). Plain English, 1-3 short sentences. Use words for maths: "x squared" not "x²". Be specific and helpful — avoid vague phrases like "you need to understand". Explain the actual step or concept clearly.
+ANTI-REPETITION: Do NOT repeat what you have already said in this conversation. If the student asks for an example, give a NEW example — vary numbers, wording, and approach. Remember what you've already explained and build on it; never parrot earlier content.
 - content: SHORT on-screen summary that SUPPLEMENTS what you say — key point or takeaway in 1 line. NOT a transcript. No LaTeX. Be concrete (e.g. "Factor pairs of 6: 2 and 3 give middle term").
-- isQuestion: Set true ONLY when you are asking the student a question they must answer (e.g. "What would you factor first?"). Omit or false otherwise.
+- isQuestion: ALWAYS false or omit. This endpoint is for normal replies only. Never set true.
 - equation: Only when discussing a specific equation. Plain form e.g. "x² + 5x + 6 = 0". Omit if not relevant.
 - graph: Only when a graph helps (parabola, line, plot). Use one of:
   - {"type":"quadratic","a":1,"b":0,"c":0,"xMin":-5,"xMax":5} for y = ax² + bx + c
@@ -383,7 +393,7 @@ export async function tutorAskQuestion(
   const systemPrompt = `You are ${tutorName}, a maths tutor. ${name}
 ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
 
-Based on the conversation so far, ask the student exactly ONE short question to check understanding. Make it specific and answerable (e.g. "What do we get when we factor x squared plus 5 x plus 6?"). Reply with only the question, plain English, one sentence.`
+Based on the conversation so far, ask the student exactly ONE short question to check understanding. Make it specific and answerable (e.g. "What do we get when we factor x squared plus 5 x plus 6?"). Do NOT repeat a question you have already asked. Reply with only the question, plain English, one sentence.`
 
   const appended = [...messages, { role: 'user' as const, content: '[Please ask the student one question based on our conversation that they should answer.]' }]
   const response = await client.messages.create({

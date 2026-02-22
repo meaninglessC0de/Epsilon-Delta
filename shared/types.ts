@@ -39,7 +39,7 @@ export interface Solve {
   finalWorking?: string // base64 JPEG (no data: prefix)
   feedbackHistory: FeedbackEntry[]
   finalFeedback?: string
-  status: 'active' | 'completed'
+  status: 'active' | 'completed' | 'incorrect'
   /** When set, this solve is part of a problem sheet; use with questionIndex/questionCount. */
   groupId?: string
   questionIndex?: number
@@ -132,6 +132,12 @@ export interface UserMetadata {
   totalSolves: number
   lastActiveAt: number
   sessionCount: number
+
+  // — Recent inputs (updated on every user action: whiteboard, chat, video) —
+  recentInputs?: { type: 'whiteboard' | 'chat' | 'video'; content: string; timestamp: number }[]
+  videoRequests?: string[]
+  /** Recent video generations: question, timestamp, optional script (narration summary) when available */
+  videoGenerations?: { question: string; timestamp: number; script?: string }[]
 }
 
 // API response shapes

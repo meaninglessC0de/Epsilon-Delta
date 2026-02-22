@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { getStoredToken } from '../lib/auth'
+import { auth } from '../lib/firebase'
+import { recordUserInput, updateVideoTopicElo, saveVideoGeneration } from '../lib/firebaseMetadata'
+import { useDevelopmentProgress } from '../lib/developmentProgressToast'
+import { MathVideoRenderer } from './MathVideoRenderer'
+import type { ScenePlan } from '../types/video'
 
 interface Props {
   onBack: () => void
@@ -11,81 +15,52 @@ interface ManimLocationState {
   suggestedQuestion?: string
 }
 
-type Phase = 'idle' | 'loading' | 'done' | 'error'
-
-const LOADING_STEPS = [
-  { label: 'Writing animation script…', duration: 8000 },
-  { label: 'Generating voiceover…', duration: 10000 },
-  { label: 'Rendering animation…', duration: 30000 },
-  { label: 'Mixing audio and video…', duration: 8000 },
-]
+type Phase = 'idle' | 'loading' | 'playing' | 'done' | 'error'
 
 export function ManimPage({ onBack }: Props) {
   const location = useLocation()
   const state = (location.state ?? {}) as ManimLocationState
-  const [question, setQuestion] = useState(() => {
-    const s = state.suggestedQuestion?.trim()
-    return s ?? ''
-  })
+  const [question, setQuestion] = useState(() => state.suggestedQuestion?.trim() ?? '')
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
-  const [videoUrl, setVideoUrl] = useState<string | null>(null)
-  const [loadingStep, setLoadingStep] = useState(0)
+  const [scenePlan, setScenePlan] = useState<ScenePlan | null>(null)
+  const [currentNarration, setCurrentNarration] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const showProgress = useDevelopmentProgress()
 
   useEffect(() => {
     const s = state.suggestedQuestion?.trim()
     if (s) setQuestion(s)
   }, [state.suggestedQuestion])
 
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
-  const stepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => abortRef.current?.abort(), [])
 
-  // Advance loading step labels over time
+  // Stop TTS when leaving the page or when tab becomes hidden
   useEffect(() => {
-    if (phase !== 'loading') {
-      setLoadingStep(0)
-      if (stepTimerRef.current) clearTimeout(stepTimerRef.current)
-      return
-    }
-    let step = 0
-    function advance() {
-      step = Math.min(step + 1, LOADING_STEPS.length - 1)
-      setLoadingStep(step)
-      if (step < LOADING_STEPS.length - 1) {
-        stepTimerRef.current = setTimeout(advance, LOADING_STEPS[step].duration)
-      }
-    }
-    stepTimerRef.current = setTimeout(advance, LOADING_STEPS[0].duration)
-    return () => { if (stepTimerRef.current) clearTimeout(stepTimerRef.current) }
-  }, [phase])
-
-  // Revoke blob URL on unmount
-  useEffect(() => {
+    const cancel = () => { if ('speechSynthesis' in window) window.speechSynthesis.cancel() }
+    const onVisibility = () => { if (document.visibilityState === 'hidden') cancel() }
+    const onPageHide = () => cancel()
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pagehide', onPageHide)
     return () => {
-      if (videoUrl) URL.revokeObjectURL(videoUrl)
-      abortRef.current?.abort()
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', onPageHide)
+      cancel()
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   async function handleGenerate() {
     if (!question.trim() || phase === 'loading') return
 
-    // Revoke old video
-    if (videoUrl) {
-      URL.revokeObjectURL(videoUrl)
-      setVideoUrl(null)
-    }
-
     setPhase('loading')
     setError(null)
-    setLoadingStep(0)
+    setScenePlan(null)
 
     const controller = new AbortController()
     abortRef.current = controller
 
     try {
-      const token = getStoredToken()
+      const token = await auth.currentUser?.getIdToken()
       const res = await fetch('/api/manim/generate', {
         method: 'POST',
         headers: {
@@ -101,15 +76,19 @@ export function ManimPage({ onBack }: Props) {
         throw new Error(body.error ?? res.statusText)
       }
 
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      setVideoUrl(url)
-      setPhase('done')
-
-      // Auto-play once metadata loads
-      setTimeout(() => {
-        videoRef.current?.play().catch(() => {})
-      }, 100)
+      const plan = (await res.json()) as ScenePlan
+      if (!plan?.segments?.length) throw new Error('No animation content generated')
+      const q = question.trim()
+      const uid = auth.currentUser?.uid
+      if (uid) {
+        recordUserInput(uid, 'video', q).catch(console.error)
+        updateVideoTopicElo(uid, q).catch(console.error)
+        const scriptSummary = plan.segments.map((s) => s.narration).join('\n\n')
+        saveVideoGeneration(uid, q, scriptSummary).catch(console.error)
+        showProgress('Personalizing future videos for you')
+      }
+      setScenePlan(plan)
+      setPhase('playing')
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return
       setError(err instanceof Error ? err.message : 'Something went wrong')
@@ -122,44 +101,45 @@ export function ManimPage({ onBack }: Props) {
     setPhase('idle')
   }
 
+  function handleAnimationComplete() {
+    setPhase('done')
+    setCurrentNarration(null)
+  }
+
   function handleTryAnother() {
-    if (videoUrl) URL.revokeObjectURL(videoUrl)
-    setVideoUrl(null)
+    setScenePlan(null)
     setPhase('idle')
     setQuestion('')
+    setCurrentNarration(null)
   }
 
   return (
     <div className="manim-page">
       <div className="manim-inner">
 
-        {/* Header */}
         <div className="manim-header">
-          <button className="btn btn--ghost btn--sm" onClick={onBack}>
-            ← Back
-          </button>
-          <div>
-            <h1 className="manim-title">Video Explanation</h1>
-            <p className="manim-sub">Enter a maths problem and get an animated video walkthrough.</p>
+          <div className="manim-header__back-row">
+            <button className="btn btn--ghost btn--sm" onClick={onBack}>
+              ← Back
+            </button>
           </div>
+          <h1 className="manim-title">Video Explanation</h1>
         </div>
 
-        {/* Input */}
         {(phase === 'idle' || phase === 'error') && (
           <div className="manim-input-section">
-            <label className="form-label">Your problem</label>
+            <label className="form-label">Your problem or topic</label>
             <textarea
               className="form-textarea"
               rows={3}
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="e.g. Solve x² + 5x + 6 = 0 by factorising"
+              placeholder="e.g. Explain Gaussian elimination / Solve x² + 5x + 6 = 0 by factorising"
               disabled={phase === 'loading'}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleGenerate()
               }}
             />
-            <p className="form-hint">⌘ + Enter to generate</p>
 
             {phase === 'error' && error && (
               <div style={{
@@ -190,40 +170,32 @@ export function ManimPage({ onBack }: Props) {
           </div>
         )}
 
-        {/* Loading */}
         {phase === 'loading' && (
           <div className="manim-loading">
             <div className="manim-spinner" />
-            <p className="manim-loading__step">{LOADING_STEPS[loadingStep].label}</p>
-            <p className="manim-loading__hint">This takes 30–90 seconds the first time.</p>
-            <button
-              className="btn btn--ghost btn--sm"
-              style={{ marginTop: '20px' }}
-              onClick={handleCancel}
-            >
+            <p className="manim-loading__step">Writing animation script…</p>
+            <button className="btn btn--ghost btn--sm" style={{ marginTop: '20px' }} onClick={handleCancel}>
               Cancel
             </button>
           </div>
         )}
 
-        {/* Video */}
-        {phase === 'done' && videoUrl && (
+        {(phase === 'playing' || phase === 'done') && scenePlan && (
           <div className="manim-result">
-            <video
-              ref={videoRef}
-              src={videoUrl}
-              controls
-              className="manim-video"
-              playsInline
-            />
+            <div className="math-video-wrapper">
+              <MathVideoRenderer
+                plan={scenePlan}
+                onComplete={handleAnimationComplete}
+                onSegmentChange={(_i, narration) => setCurrentNarration(narration)}
+                autoPlay
+              />
+            </div>
+            {currentNarration && (
+              <p className="manim-narration" style={{ marginTop: '12px', fontStyle: 'italic', color: 'var(--text-2)', fontSize: '0.95rem' }}>
+                {currentNarration}
+              </p>
+            )}
             <div style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap' }}>
-              <a
-                href={videoUrl}
-                download="explanation.mp4"
-                className="btn btn--ghost"
-              >
-                Download MP4
-              </a>
               <button className="btn btn--primary" onClick={handleTryAnother}>
                 Try another problem
               </button>

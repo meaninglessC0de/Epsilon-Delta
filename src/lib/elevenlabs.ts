@@ -61,6 +61,7 @@ export async function speakText(rawText: string, onEnd?: () => void): Promise<vo
   const apiKey = import.meta.env.VITE_ELEVENLABS_API_KEY as string | undefined
   if (!apiKey) {
     console.info('[ElevenLabs] VITE_ELEVENLABS_API_KEY not set — voice feedback disabled')
+    try { onEnd?.() } catch { /* ignore */ }
     return
   }
 
@@ -99,6 +100,7 @@ export async function speakText(rawText: string, onEnd?: () => void): Promise<vo
 
     if (!response.ok) {
       console.error(`[ElevenLabs] ${response.status}: ${await response.text()}`)
+      try { onEnd?.() } catch { /* ignore */ }
       return
     }
 
@@ -112,14 +114,27 @@ export async function speakText(rawText: string, onEnd?: () => void): Promise<vo
 
     const audio = new Audio(url)
     currentAudio = audio
-    audio.addEventListener('ended', () => {
+
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      clearTimeout(safetyTimer)
       URL.revokeObjectURL(url)
-      onEnd?.()
-    })
+      if (currentAudio === audio) currentAudio = null
+      try { onEnd?.() } catch { /* ignore */ }
+    }
+
+    const safetyTimer = setTimeout(finish, 45_000)
+
+    audio.addEventListener('ended', finish)
+    audio.addEventListener('error', finish)
+
     await audio.play()
   } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') return // expected on cancel
+    if (err instanceof Error && err.name === 'AbortError') return
     console.error('[ElevenLabs]', err)
+    try { onEnd?.() } catch { /* ignore */ }
   }
 }
 

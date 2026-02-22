@@ -50,7 +50,7 @@ function SolveCard({
       <div className="solve-card__body">
         <div className="solve-card__meta">
           <span className={`solve-card__badge solve-card__badge--${solve.status}`}>
-            {solve.status === 'completed' ? 'Completed' : 'In Progress'}
+            {solve.status === 'completed' ? 'Completed' : solve.status === 'incorrect' ? 'Needs revision' : 'In Progress'}
           </span>
           <span className="solve-card__date">{formatDate(solve.createdAt)}</span>
         </div>
@@ -76,7 +76,7 @@ function SolveCard({
           </span>
 
           <div className="solve-card__actions">
-            {solve.status === 'active' && (
+            {(solve.status === 'active' || solve.status === 'incorrect') && (
               <button
                 className="btn btn--ghost btn--sm"
                 onClick={() => onResume(solve.id)}
@@ -131,7 +131,7 @@ export function SolvePage({ onNewProblem, onResumeSolve }: Props) {
   }
 
   const completed = solves.filter((s) => s.status === 'completed')
-  const active = solves.filter((s) => s.status === 'active')
+  const active = solves.filter((s) => s.status === 'active' || s.status === 'incorrect')
 
   return (
     <div className="page solve-list-page">

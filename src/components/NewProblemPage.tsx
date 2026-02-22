@@ -323,7 +323,6 @@ export function NewProblemPage({ onBack, onContinue, onContinueSheet }: Props) {
                       <p className="sheet-dropzone__text">
                         <strong>Drop image or PDF here</strong> or click to browse
                       </p>
-                      <p className="sheet-dropzone__hint">All pages of multi-page PDFs are included</p>
                     </div>
                   )}
                 </div>

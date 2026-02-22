@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { chatWithTutor, type TutorMessage } from '../lib/claude'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
-import { getMemory, getMetadataForAgent } from '../lib/memory'
-import type { User, Solve, AgentMemory } from '../types'
+import { getMetadataForAgent } from '../lib/memory'
+import type { User, Solve } from '../types'
+import type { UserMetadata } from '../../shared/types'
 
 type Phase = 'idle' | 'listening' | 'processing' | 'speaking'
 
@@ -15,14 +16,13 @@ interface Props {
 export function TutorCallModal({ user, solves, onClose }: Props) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [messages, setMessages] = useState<TutorMessage[]>([])
-  const [memory, setMemory] = useState<AgentMemory | null>(null)
   const [interimText, setInterimText] = useState('')
   const [textInput, setTextInput] = useState('')
   const [hasSpeechAPI, setHasSpeechAPI] = useState(true)
 
   const phaseRef = useRef<Phase>('idle')
-  const memoryRef = useRef<AgentMemory | null>(null)
-  const userContextRef = useRef<string>('')
+  /** Full UserMetadata — populated async on mount; all fields available to the tutor. */
+  const metaRef = useRef<UserMetadata | null>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const isMountedRef = useRef(true)
 
@@ -30,8 +30,6 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
     phaseRef.current = p
     setPhase(p)
   }, [])
-
-  useEffect(() => { memoryRef.current = memory }, [memory])
 
   const startListening = useCallback(() => {
     if (!isMountedRef.current) return
@@ -108,16 +106,8 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
 
     try {
       const reply = await chatWithTutor(msgs, {
-        userName: user.name ?? user.email.split('@')[0],
-        solves: solves.map((s) => ({
-          problem: s.problem,
-          status: s.status,
-          finalFeedback: s.finalFeedback,
-        })),
-        memory: memoryRef.current
-          ? { topicsCovered: memoryRef.current.topicsCovered, weaknesses: memoryRef.current.weaknesses, solveSummaries: memoryRef.current.solveSummaries }
-          : undefined,
-        userContext: userContextRef.current || undefined,
+        meta: metaRef.current,
+        solves,
       })
 
       if (!isMountedRef.current) return
@@ -142,11 +132,10 @@ export function TutorCallModal({ user, solves, onClose }: Props) {
     }
   }, [user, solves, startListening]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Kick off with greeting on mount + fetch memory and metadata context
+  // Kick off with greeting on mount + fetch full user metadata for personalisation
   useEffect(() => {
     isMountedRef.current = true
-    getMemory().then((m) => { if (isMountedRef.current) setMemory(m) }).catch(() => {})
-    getMetadataForAgent().then((a) => { if (isMountedRef.current && a) userContextRef.current = a.contextString }).catch(() => {})
+    getMetadataForAgent().then((a) => { if (isMountedRef.current && a) metaRef.current = a.meta }).catch(() => {})
 
     const greeting: TutorMessage = {
       role: 'assistant',

@@ -67,6 +67,37 @@ function parsePreferenceScores(data: unknown): PreferenceScores | undefined {
   return Object.keys(out).length ? (out as PreferenceScores) : undefined
 }
 
+function parseRecentInputs(data: unknown): UserMetadata['recentInputs'] {
+  if (!Array.isArray(data)) return []
+  return data
+    .filter((x): x is { type?: string; content?: string; timestamp?: number } => x !== null && typeof x === 'object')
+    .map((x) => ({
+      type: (x.type === 'whiteboard' || x.type === 'chat' || x.type === 'video' ? x.type : 'whiteboard') as 'whiteboard' | 'chat' | 'video',
+      content: String(x.content ?? '').slice(0, 500),
+      timestamp: typeof x.timestamp === 'number' ? x.timestamp : Date.now(),
+    }))
+    .filter((x) => x.content)
+    .slice(-50)
+}
+
+function parseVideoRequests(data: unknown): string[] {
+  if (!Array.isArray(data)) return []
+  return data.filter((x): x is string => typeof x === 'string').map((s) => s.slice(0, 300)).slice(-20)
+}
+
+function parseVideoGenerations(data: unknown): UserMetadata['videoGenerations'] {
+  if (!Array.isArray(data)) return []
+  return data
+    .filter((x): x is Record<string, unknown> => x !== null && typeof x === 'object')
+    .map((x) => ({
+      question: String(x.question ?? '').slice(0, 500),
+      timestamp: typeof x.timestamp === 'number' ? x.timestamp : Date.now(),
+      script: typeof x.script === 'string' ? x.script.slice(0, 2000) : undefined,
+    }))
+    .filter((x) => x.question)
+    .slice(-20)
+}
+
 function docToMetadata(data: Record<string, unknown>): UserMetadata {
   const arr = (key: string) => (Array.isArray(data[key]) ? (data[key] as string[]) : [])
   const num = (key: string, fallback: number) => (typeof data[key] === 'number' ? (data[key] as number) : fallback)
@@ -106,6 +137,9 @@ function docToMetadata(data: Record<string, unknown>): UserMetadata {
     totalSolves: num('totalSolves', 0),
     lastActiveAt: num('lastActiveAt', 0),
     sessionCount: num('sessionCount', 0),
+    recentInputs: parseRecentInputs(data.recentInputs),
+    videoRequests: parseVideoRequests(data.videoRequests),
+    videoGenerations: parseVideoGenerations(data.videoGenerations),
   }
 }
 
@@ -285,7 +319,83 @@ export function metadataToAgentContextString(meta: UserMetadata): string {
     const recent = meta.solveSummaries.slice(-3)
     parts.push(`Recent problem summaries: ${recent.join(' | ')}.`)
   }
+  if (meta.recentInputs?.length) {
+    const recent = meta.recentInputs.slice(-5).map((r) => `${r.type}: ${r.content.slice(0, 80)}`)
+    parts.push(`Recent activity: ${recent.join('; ')}.`)
+  }
+  if (meta.videoRequests?.length) {
+    parts.push(`Recent video topics: ${meta.videoRequests.slice(-5).join(', ')}.`)
+  }
   return parts.join(' ')
+}
+
+/** Record user input for personalization. Call on every meaningful user action. */
+export async function recordUserInput(
+  uid: string,
+  type: 'whiteboard' | 'chat' | 'video',
+  content: string,
+  firestore?: Firestore
+): Promise<void> {
+  const d = firestore ?? db
+  const ref = doc(d, METADATA_COLLECTION, uid)
+  const snap = await getDoc(ref)
+  if (!snap.exists()) return
+  const data = snap.data() as Record<string, unknown>
+  const existing = parseRecentInputs(data.recentInputs) ?? []
+  const entry = { type, content: content.slice(0, 500), timestamp: Date.now() }
+  const recentInputs = [...existing, entry].slice(-50)
+  const updates: Record<string, unknown> = { recentInputs, updatedAt: Date.now(), lastActiveAt: Date.now() }
+  if (type === 'video') {
+    const videoRequests = parseVideoRequests(data.videoRequests) ?? []
+    updates.videoRequests = [...videoRequests, content.slice(0, 300)].slice(-20)
+  }
+  await updateDoc(ref, stripUndefined(updates))
+}
+
+/** Save a video generation (question + optional script) for dashboard display. */
+export async function saveVideoGeneration(
+  uid: string,
+  question: string,
+  script?: string,
+  firestore?: Firestore
+): Promise<void> {
+  const d = firestore ?? db
+  const ref = doc(d, METADATA_COLLECTION, uid)
+  const snap = await getDoc(ref)
+  if (!snap.exists()) return
+  const data = snap.data() as Record<string, unknown>
+  const existing = parseVideoGenerations(data.videoGenerations) ?? []
+  const entry = {
+    question: question.slice(0, 500),
+    timestamp: Date.now(),
+    script: script ? script.slice(0, 2000) : undefined,
+  }
+  const videoGenerations = [...existing, entry].slice(-20)
+  await updateDoc(ref, stripUndefined({ videoGenerations, updatedAt: Date.now(), lastActiveAt: Date.now() }))
+}
+
+/** Update topic ELO after a video request (infer topic from question). Used for video difficulty. */
+export async function updateVideoTopicElo(
+  uid: string,
+  question: string,
+  firestore?: Firestore
+): Promise<void> {
+  const meta = await getUserMetadata(uid, firestore)
+  if (!meta) return
+  const topic = inferTopicFromQuestion(question)
+  const current = meta.topicElo[topic] ?? DEFAULT_ELO
+  const newElo = Math.round(current + ELO_K_FACTOR * 0.1)
+  const topicElo = { ...meta.topicElo, [topic]: Math.min(2500, newElo) }
+  await updateMetadataPartial(uid, { topicElo }, { touchLastActive: true }, firestore)
+}
+
+function inferTopicFromQuestion(q: string): string {
+  const lower = q.toLowerCase()
+  const topics = ['algebra', 'linear_algebra', 'calculus', 'geometry', 'probability', 'statistics', 'differential_equations', 'number_theory', 'discrete_math', 'optimization', 'complex_analysis', 'abstract_algebra', 'real_analysis', 'topology']
+  for (const t of topics) {
+    if (lower.includes(t.replace('_', ' ')) || lower.includes(t)) return t
+  }
+  return 'general'
 }
 
 export function metadataToUser(uid: string, meta: UserMetadata): User {

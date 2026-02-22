@@ -46,7 +46,7 @@ function firestoreToSolve(id: string, data: Record<string, unknown>): Solve {
     finalWorking: data.finalWorking as string | undefined,
     finalFeedback: data.finalFeedback as string | undefined,
     feedbackHistory: Array.isArray(data.feedbackHistory) ? (data.feedbackHistory as FeedbackEntry[]) : [],
-    status: (data.status as 'active' | 'completed') ?? 'active',
+    status: (data.status as 'active' | 'completed' | 'incorrect') ?? 'active',
     groupId: data.groupId as string | undefined,
     questionIndex: data.questionIndex as number | undefined,
     questionCount: data.questionCount as number | undefined,

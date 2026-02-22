@@ -10,7 +10,10 @@ import {
 } from '../lib/claude'
 import { speakText, stopSpeaking } from '../lib/elevenlabs'
 import { getMemory, getMetadataForAgent } from '../lib/memory'
-import { getSolves } from '../lib/storage'
+import { recordUserInput } from '../lib/firebaseMetadata'
+import { auth } from '../lib/firebase'
+import { useDevelopmentProgress } from '../lib/developmentProgressToast'
+import { getSolves, getRecentConversations, saveConversation } from '../lib/storage'
 import type { User, Solve, AgentMemory } from '../types'
 import { ChatGraphVisual } from './ChatGraphVisual'
 import confetti from 'canvas-confetti'
@@ -32,7 +35,14 @@ function getMathematicianForUser(userId: string): string {
   return FAMOUS_MATHEMATICIANS[Math.abs(hash) % FAMOUS_MATHEMATICIANS.length]
 }
 
-type Phase = 'idle' | 'listening' | 'processing' | 'speaking' | 'awaiting_answer'
+/**
+ * Two mutually exclusive states:
+ * - ai_speaking: TTS playing. Mic OFF. Only TTS callback can transition out.
+ * - user_listening: Mic ON. TTS OFF.
+ * - processing: API call in progress. Mic OFF.
+ * - awaiting_answer: After explicit "Ask me a question". Mic OFF until user taps.
+ */
+type Phase = 'ai_speaking' | 'user_listening' | 'processing' | 'awaiting_answer'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -51,32 +61,40 @@ export function ChatPage({ user, onBack }: Props) {
   const navigate = useNavigate()
   const [solves, setSolves] = useState<Solve[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [phase, setPhase] = useState<Phase>('idle')
+  const [phase, setPhase] = useState<Phase>('ai_speaking')
   const [memory, setMemory] = useState<AgentMemory | null>(null)
+  const [previousConversationContext, setPreviousConversationContext] = useState<string>('')
   const [interimText, setInterimText] = useState('')
   const [hasSpeechAPI, setHasSpeechAPI] = useState(true)
   const [askingQuestion, setAskingQuestion] = useState(false)
+  const [needsTapToSpeak, setNeedsTapToSpeak] = useState(false)
 
-  const phaseRef = useRef<Phase>('idle')
+  const phaseRef = useRef<Phase>('ai_speaking')
   const memoryRef = useRef<AgentMemory | null>(null)
+  const previousContextRef = useRef<string>('')
   const userContextRef = useRef<string>('')
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const isMountedRef = useRef(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const messagesRef = useRef<ChatMessage[]>(messages)
+  const messagesRef = useRef<ChatMessage[]>([])
+
   useEffect(() => { messagesRef.current = messages }, [messages])
+  useEffect(() => { phaseRef.current = phase }, [phase])
+  useEffect(() => { memoryRef.current = memory }, [memory])
+  useEffect(() => { previousContextRef.current = previousConversationContext }, [previousConversationContext])
 
   const mathematician = getMathematicianForUser(user.id)
+  const showProgress = useDevelopmentProgress()
+
   const setPhaseSync = useCallback((p: Phase) => {
     phaseRef.current = p
     setPhase(p)
   }, [])
 
-  useEffect(() => { memoryRef.current = memory }, [memory])
-
-  useEffect(() => {
-    getSolves().then(setSolves).catch(() => {})
+  const stopMic = useCallback(() => {
+    recognitionRef.current?.abort()
+    recognitionRef.current = null
   }, [])
 
   const tutorContext = useCallback(
@@ -95,6 +113,7 @@ export function ChatPage({ user, onBack }: Props) {
           }
         : undefined,
       userContext: userContextRef.current || undefined,
+      previousConversationContext: previousContextRef.current || undefined,
       mathematicianName: mathematician,
     }),
     [user, solves, mathematician]
@@ -106,16 +125,18 @@ export function ChatPage({ user, onBack }: Props) {
 
   const startListening = useCallback(() => {
     if (!isMountedRef.current) return
+    if (phaseRef.current === 'ai_speaking' || phaseRef.current === 'processing') return
+
     const SpeechRecognition =
       (window as Window & { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition }).SpeechRecognition ??
       (window as Window & { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition }).webkitSpeechRecognition
 
     if (!SpeechRecognition) {
       setHasSpeechAPI(false)
-      setPhaseSync('listening')
       return
     }
 
+    stopSpeaking()
     const recognition = new SpeechRecognition()
     recognition.continuous = false
     recognition.interimResults = true
@@ -143,33 +164,39 @@ export function ChatPage({ user, onBack }: Props) {
 
     recognition.onend = () => {
       if (!isMountedRef.current) return
-      if (!gotFinal && phaseRef.current === 'listening') {
+      recognitionRef.current = null
+      if (!gotFinal && phaseRef.current === 'user_listening') {
         setTimeout(() => {
-          if (isMountedRef.current && phaseRef.current === 'listening') startListening()
+          if (isMountedRef.current && phaseRef.current === 'user_listening') startListening()
         }, 300)
       }
     }
 
     recognition.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error === 'no-speech' && isMountedRef.current && phaseRef.current === 'listening') {
+      if (e.error === 'no-speech' && phaseRef.current === 'user_listening') {
         setTimeout(() => {
-          if (isMountedRef.current && phaseRef.current === 'listening') startListening()
+          if (isMountedRef.current && phaseRef.current === 'user_listening') startListening()
         }, 300)
       }
     }
 
-    setPhaseSync('listening')
+    setPhaseSync('user_listening')
+    setNeedsTapToSpeak(false)
     recognition.start()
-  }, [setPhaseSync])
+  }, [setPhaseSync, stopSpeaking])
 
   const handleUserInput = useCallback(
     async (text: string) => {
       if (!isMountedRef.current) return
-      recognitionRef.current?.abort()
+      stopMic()
+      if (phaseRef.current === 'ai_speaking' || phaseRef.current === 'processing') return
 
       const userMsg: ChatMessage = { role: 'user', content: text }
       const nextForApi = [...messagesRef.current, userMsg]
       setMessages((prev) => [...prev, userMsg])
+
+      const uid = auth.currentUser?.uid
+      if (uid) recordUserInput(uid, 'chat', text).catch(console.error)
 
       const lastAssistant = messagesRef.current.filter((m) => m.role === 'assistant').pop()
       const wasAnsweringQuestion = !!lastAssistant?.isQuestion
@@ -186,18 +213,22 @@ export function ChatPage({ user, onBack }: Props) {
 
           if (evalRes.correct) {
             confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } })
+            showProgress("We're learning what works for you")
           }
 
-          setPhaseSync('speaking')
-          const timeout = setTimeout(() => {
-            if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
-          }, 30000)
+          stopMic()
+          setPhaseSync('ai_speaking')
           speakText(evalRes.speak, () => {
-            clearTimeout(timeout)
-            if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
+            if (!isMountedRef.current) return
+            if (phaseRef.current === 'ai_speaking') {
+              setPhaseSync('user_listening')
+              startListening()
+            }
           }).catch(() => {
-            clearTimeout(timeout)
-            if (isMountedRef.current) startListening()
+            if (isMountedRef.current && phaseRef.current === 'ai_speaking') {
+              setPhaseSync('user_listening')
+              setNeedsTapToSpeak(true)
+            }
           })
         } else {
           const res: TutorResponse = await chatWithTutorStructured(toTutorMessages(nextForApi), tutorContext())
@@ -206,71 +237,57 @@ export function ChatPage({ user, onBack }: Props) {
           const aiMsg: ChatMessage = {
             role: 'assistant',
             content: res.content,
-            isQuestion: res.isQuestion,
             equation: res.equation,
             graph: res.graph,
           }
           setMessages((prev) => [...prev, aiMsg])
 
-          if (res.isQuestion) {
-            setPhaseSync('speaking')
-            const timeout = setTimeout(() => {
-              if (isMountedRef.current && phaseRef.current === 'speaking') setPhaseSync('awaiting_answer')
-            }, 30000)
-            speakText(res.speak, () => {
-              clearTimeout(timeout)
-              if (isMountedRef.current && phaseRef.current === 'speaking') setPhaseSync('awaiting_answer')
-            }).catch(() => {
-              clearTimeout(timeout)
-              if (isMountedRef.current) setPhaseSync('awaiting_answer')
-            })
-          } else {
-            setPhaseSync('speaking')
-            const timeout = setTimeout(() => {
-              if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
-            }, 30000)
-            speakText(res.speak, () => {
-              clearTimeout(timeout)
-              if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
-            }).catch(() => {
-              clearTimeout(timeout)
-              if (isMountedRef.current) startListening()
-            })
-          }
+          stopMic()
+          setPhaseSync('ai_speaking')
+          speakText(res.speak, () => {
+            if (!isMountedRef.current) return
+            if (phaseRef.current === 'ai_speaking') {
+              setPhaseSync('user_listening')
+              startListening()
+            }
+          }).catch(() => {
+            if (isMountedRef.current && phaseRef.current === 'ai_speaking') {
+              setPhaseSync('user_listening')
+              setNeedsTapToSpeak(true)
+            }
+          })
         }
       } catch {
-        if (isMountedRef.current) setPhaseSync(wasAnsweringQuestion ? 'awaiting_answer' : 'idle')
+        if (isMountedRef.current) setPhaseSync(wasAnsweringQuestion ? 'awaiting_answer' : 'user_listening')
+        if (phaseRef.current === 'user_listening') setNeedsTapToSpeak(true)
       }
     },
-    [tutorContext, toTutorMessages, setPhaseSync, startListening]
+    [tutorContext, toTutorMessages, setPhaseSync, startListening, stopMic, showProgress]
   )
 
   const handleAskQuestion = useCallback(async () => {
     if (messagesRef.current.length === 0 || phase === 'processing' || askingQuestion) return
-    recognitionRef.current?.abort()
+    stopMic()
     setAskingQuestion(true)
     setPhaseSync('processing')
     try {
       const question = await tutorAskQuestion(toTutorMessages(messagesRef.current), tutorContext())
       if (!isMountedRef.current) return
       setMessages((prev) => [...prev, { role: 'assistant', content: question, isQuestion: true }])
-      setPhaseSync('speaking')
-      const timeout = setTimeout(() => {
-        if (isMountedRef.current && phaseRef.current === 'speaking') setPhaseSync('awaiting_answer')
-      }, 30000)
+      stopMic()
+      setPhaseSync('ai_speaking')
       speakText(question, () => {
-        clearTimeout(timeout)
-        if (isMountedRef.current && phaseRef.current === 'speaking') setPhaseSync('awaiting_answer')
+        if (!isMountedRef.current) return
+        if (phaseRef.current === 'ai_speaking') setPhaseSync('awaiting_answer')
       }).catch(() => {
-        clearTimeout(timeout)
-        if (isMountedRef.current) setPhaseSync('awaiting_answer')
+        if (isMountedRef.current && phaseRef.current === 'ai_speaking') setPhaseSync('awaiting_answer')
       })
     } catch {
-      if (isMountedRef.current) setPhaseSync('idle')
+      if (isMountedRef.current) setPhaseSync('awaiting_answer')
     } finally {
       if (isMountedRef.current) setAskingQuestion(false)
     }
-  }, [phase, askingQuestion, tutorContext, toTutorMessages, setPhaseSync])
+  }, [phase, askingQuestion, tutorContext, toTutorMessages, setPhaseSync, stopMic])
 
   const handleGenerateVideo = useCallback(() => {
     const summary = messages.length
@@ -281,55 +298,72 @@ export function ChatPage({ user, onBack }: Props) {
           .join('\n')
       : ''
     stopSpeaking()
-    recognitionRef.current?.abort()
+    stopMic()
     navigate('/manim', { state: { fromChat: true, suggestedQuestion: summary || undefined } })
-  }, [messages, navigate])
+  }, [messages, navigate, stopMic])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const handleEndConversation = useCallback(() => {
+  const handleEndConversation = useCallback(async () => {
     stopSpeaking()
-    recognitionRef.current?.abort()
+    stopMic()
+    if (messagesRef.current.some((m) => m.role === 'user')) {
+      const toSave = messagesRef.current.map((m) => ({ role: m.role, content: m.content }))
+      await saveConversation(toSave).catch(() => {})
+    }
     onBack()
-  }, [onBack])
+  }, [onBack, stopMic])
 
   useEffect(() => {
     isMountedRef.current = true
     getMemory().then((m) => { if (isMountedRef.current) setMemory(m) }).catch(() => {})
     getMetadataForAgent().then((a) => { if (isMountedRef.current && a) userContextRef.current = a.contextString }).catch(() => {})
 
-    const greetingContent = `Hi${user.name ? ' ' + user.name : ''}! I'm ${mathematician}. What would you like to work on?`
-    const greeting: ChatMessage = { role: 'assistant', content: 'Say what you’d like to work on — I’m listening.' }
-    setMessages([greeting])
-    setPhaseSync('speaking')
+    getSolves().then(setSolves).catch(() => {})
 
-    const timeout = setTimeout(() => {
-      if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
-    }, 30000)
+    getRecentConversations().then((convs) => {
+      if (!isMountedRef.current) return
+      if (convs.length === 0) return
+      const summary = convs
+        .map((c) =>
+          c.messages
+            .slice(-8)
+            .map((m) => (m.role === 'user' ? `Student: ${m.content}` : `Tutor: ${m.content}`))
+            .join('; ')
+        )
+        .join('\n---\n')
+      setPreviousConversationContext(summary)
+    }).catch(() => {})
+
+    const greetingContent = `Hi${user.name ? ' ' + user.name : ''}! I'm ${mathematician}. What would you like to work on?`
+    const greeting: ChatMessage = { role: 'assistant', content: 'Say what you’d like to work on.' }
+    setMessages([greeting])
+    stopMic()
+    setPhaseSync('ai_speaking')
 
     speakText(greetingContent, () => {
-      clearTimeout(timeout)
-      if (isMountedRef.current && phaseRef.current === 'speaking') startListening()
+      if (!isMountedRef.current) return
+      if (phaseRef.current === 'ai_speaking') {
+        setPhaseSync('user_listening')
+        startListening()
+      }
     }).catch(() => {
-      clearTimeout(timeout)
-      if (isMountedRef.current) startListening()
+      if (isMountedRef.current && phaseRef.current === 'ai_speaking') {
+        setPhaseSync('user_listening')
+        setNeedsTapToSpeak(true)
+      }
     })
 
     return () => {
       isMountedRef.current = false
-      recognitionRef.current?.abort()
+      stopMic()
       stopSpeaking()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const phaseLabel =
-    phase === 'listening' ? 'Listening…'
-    : phase === 'processing' ? 'Thinking…'
-    : phase === 'speaking' ? 'Speaking…'
-    : phase === 'awaiting_answer' ? 'Tap to answer'
-    : 'Idle'
+  const showTapToSpeak = (phase === 'awaiting_answer' || needsTapToSpeak) && hasSpeechAPI && phase !== 'ai_speaking'
 
   return (
     <div className="chat-page">
@@ -338,10 +372,7 @@ export function ChatPage({ user, onBack }: Props) {
           <button type="button" className="btn btn--ghost btn--sm" onClick={onBack}>
             ← Back
           </button>
-          <div>
-            <h1 className="chat-page__title">Chat with {mathematician}</h1>
-            <p className="chat-page__sub">{phaseLabel}</p>
-          </div>
+          <h1 className="chat-page__title">Chat with {mathematician}</h1>
         </header>
 
         <div ref={listRef} className="chat-page__list">
@@ -358,9 +389,7 @@ export function ChatPage({ user, onBack }: Props) {
             >
               <p className="chat-msg__content">{msg.content}</p>
               {msg.role === 'assistant' && msg.equation && (
-                <div className="chat-msg__equation" aria-label="Equation">
-                  {msg.equation}
-                </div>
+                <div className="chat-msg__equation" aria-label="Equation">{msg.equation}</div>
               )}
               {msg.role === 'assistant' && msg.graph && (
                 <ChatGraphVisual spec={msg.graph} />
@@ -375,19 +404,16 @@ export function ChatPage({ user, onBack }: Props) {
           <div ref={messagesEndRef} />
         </div>
 
-        {!hasSpeechAPI && (
-          <p className="chat-page__voice-only-hint">
-            Voice only — please use a browser that supports speech input (e.g. Chrome) to talk.
-          </p>
-        )}
-
-        {phase === 'awaiting_answer' && hasSpeechAPI && (
+        {showTapToSpeak && (
           <button
             type="button"
             className="btn btn--primary chat-page__answer-btn"
-            onClick={() => startListening()}
+            onClick={() => {
+              setNeedsTapToSpeak(false)
+              startListening()
+            }}
           >
-            Tap to answer
+            {phase === 'awaiting_answer' ? 'Tap to answer' : 'Tap to speak'}
           </button>
         )}
 
@@ -400,18 +426,10 @@ export function ChatPage({ user, onBack }: Props) {
           >
             Ask me a question
           </button>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={handleGenerateVideo}
-          >
+          <button type="button" className="btn btn--ghost btn--sm" onClick={handleGenerateVideo}>
             Generate video explanation
           </button>
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={handleEndConversation}
-          >
+          <button type="button" className="btn btn--primary" onClick={handleEndConversation}>
             End conversation
           </button>
         </div>

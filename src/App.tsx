@@ -3,10 +3,13 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from '
 import { DashboardPage } from './components/DashboardPage'
 import { ChatPage } from './components/ChatPage'
 import { ManimPage } from './components/ManimPage'
+import { ProfilePage } from './components/ProfilePage'
+import { ThemeToggle } from './lib/theme'
 import { NewProblemPage } from './components/NewProblemPage'
 import { WhiteboardPage } from './components/WhiteboardPage'
 import { AuthPage } from './components/AuthPage'
 import { AppNavbar } from './components/AppNavbar'
+import { AppShellWithSidebar } from './components/AppShellWithSidebar'
 import { OnboardingFlow } from './components/onboarding/OnboardingFlow'
 import type { Solve, User } from './types'
 import { saveSolve, getSolveById, initStorage } from './lib/storage'
@@ -186,59 +189,73 @@ function AppRoutes() {
   // Not logged in → show login (any route)
   if (!user) {
     return (
-      <Routes>
+      <>
+        <ThemeToggle />
+        <Routes>
         <Route path="/login" element={<AuthPage onSuccess={onAuthSuccess} />} />
         <Route path="/signup" element={<Navigate to="/login" replace />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+      </>
     )
   }
 
   // Logged in, onboarding not done → onboarding only
   if (!onboardingComplete) {
     return (
-      <Routes>
+      <>
+        <ThemeToggle />
+        <Routes>
         <Route path="/onboarding" element={<OnboardingFlow user={user} onComplete={onOnboardingComplete} />} />
         <Route path="/onboarding/:stepIndex" element={<OnboardingFlow user={user} onComplete={onOnboardingComplete} />} />
         <Route path="*" element={<Navigate to="/onboarding" replace />} />
       </Routes>
+      </>
     )
   }
 
-  // Logged in, onboarding done → app
+  // Logged in, onboarding done → app (navbar + sidebar + pocket)
   return (
     <Routes>
       <Route
         path="/"
         element={
-          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
-            <DashboardPage user={user} onNewProblem={goNew} onResumeSolve={goSolve} onGenerateVideo={goManim} onOpenChat={goChat} />
-          </AppShell>
+          <AppShellWithSidebar user={user} onLogout={onLogout} onHome={goHome} onNewProblem={goNew} onOpenChat={goChat} onGenerateVideo={goManim} onOpenProfile={() => navigate('/profile')}>
+            <DashboardPage user={user} onNewProblem={goNew} onResumeSolve={goSolve} onGenerateVideo={goManim} onOpenChat={goChat} onOpenProfile={() => navigate('/profile')} />
+          </AppShellWithSidebar>
         }
       />
       <Route
         path="/new"
         element={
-          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
+          <AppShellWithSidebar user={user} onLogout={onLogout} onHome={goHome} onNewProblem={goNew} onOpenChat={goChat} onGenerateVideo={goManim} onOpenProfile={() => navigate('/profile')}>
             <NewProblemPage onBack={goHome} onContinue={startSolve} onContinueSheet={startSheet} />
-          </AppShell>
+          </AppShellWithSidebar>
         }
       />
       <Route path="/solve/:solveId" element={<SolveScreen onFinish={goHome} />} />
       <Route
         path="/chat"
         element={
-          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
+          <AppShellWithSidebar user={user} onLogout={onLogout} onHome={goHome} onNewProblem={goNew} onOpenChat={goChat} onGenerateVideo={goManim} onOpenProfile={() => navigate('/profile')}>
             <ChatPage user={user} onBack={goHome} />
-          </AppShell>
+          </AppShellWithSidebar>
         }
       />
       <Route
         path="/manim"
         element={
-          <AppShell user={user} onLogout={onLogout} onHome={goHome}>
+          <AppShellWithSidebar user={user} onLogout={onLogout} onHome={goHome} onNewProblem={goNew} onOpenChat={goChat} onGenerateVideo={goManim} onOpenProfile={() => navigate('/profile')}>
             <ManimPage onBack={goHome} />
-          </AppShell>
+          </AppShellWithSidebar>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <AppShellWithSidebar user={user} onLogout={onLogout} onHome={goHome} onNewProblem={goNew} onOpenChat={goChat} onGenerateVideo={goManim} onOpenProfile={() => navigate('/profile')}>
+            <ProfilePage user={user} onBack={goHome} />
+          </AppShellWithSidebar>
         }
       />
       <Route path="/login" element={<Navigate to="/" replace />} />

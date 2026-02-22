@@ -1,5 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useSearchParams, useNavigate } from 'react-router-dom'
+import { ReactTyped } from 'react-typed'
 import { getSolves, deleteSolve } from '../lib/storage'
+import { getUserMetadata } from '../lib/firebaseMetadata'
 import type { User, Solve } from '../types'
 
 interface Props {
@@ -8,23 +11,7 @@ interface Props {
   onResumeSolve: (id: string) => void
   onGenerateVideo: () => void
   onOpenChat: () => void
-}
-
-const FAMOUS_MATHEMATICIANS = [
-  'Euler', 'Gauss', 'Riemann', 'Fermat', 'Pascal', 'Descartes', 'Leibniz', 'Newton',
-  'Archimedes', 'Euclid', 'Pythagoras', 'Hypatia', 'Cantor', 'Noether', 'Lovelace',
-  'Turing', 'Shannon', 'Gödel', 'Poincaré', 'Ramanujan', 'Laplace', 'Lagrange',
-  'Cauchy', 'Bernoulli', 'Galois', 'Abel', 'Diophantus', 'al-Khwarizmi', 'Bhaskara',
-  'Kovalevskaya', 'Germain', 'Dedekind', 'Hilbert', 'Kolmogorov', 'von Neumann',
-  'Euclid', 'Ptolemy', 'Fibonacci', 'Cardano', 'Viète', 'Brahmagupta', 'Omar Khayyam',
-  'Tartaglia', 'Bombelli', 'Napier', 'Kepler', 'Galileo', 'Cavalieri', 'Fermat',
-  'Wallis', 'Brouwer', 'Hausdorff', 'Lebesgue', 'Borel', 'Banach', 'Bourbaki',
-]
-
-function getMathematicianForUser(userId: string): string {
-  let hash = 0
-  for (let i = 0; i < userId.length; i++) hash = (hash << 5) - hash + userId.charCodeAt(i)
-  return FAMOUS_MATHEMATICIANS[Math.abs(hash) % FAMOUS_MATHEMATICIANS.length]
+  onOpenProfile?: () => void
 }
 
 function getGreeting(): string {
@@ -50,15 +37,17 @@ function SolveCard({
   solve,
   onDelete,
   onResume,
+  onResumeDisabled,
 }: {
   solve: Solve
   onDelete: (id: string) => void
   onResume: (id: string) => void
+  onResumeDisabled?: boolean
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   return (
-    <article className="solve-card">
+    <article className="solve-card dashboard-card">
       {solve.finalWorking ? (
         <div className="solve-card__thumbnail">
           <img src={`data:image/jpeg;base64,${solve.finalWorking}`} alt="Final working" />
@@ -72,7 +61,7 @@ function SolveCard({
       <div className="solve-card__body">
         <div className="solve-card__meta">
           <span className={`solve-card__badge solve-card__badge--${solve.status}`}>
-            {solve.status === 'completed' ? 'Completed' : 'In Progress'}
+            {solve.status === 'completed' ? 'Completed' : solve.status === 'incorrect' ? 'Needs revision' : 'In Progress'}
           </span>
           <span className="solve-card__date">{formatDate(solve.createdAt)}</span>
         </div>
@@ -96,7 +85,7 @@ function SolveCard({
           </span>
 
           <div className="solve-card__actions">
-            {solve.status === 'active' && (
+            {(solve.status === 'active' || solve.status === 'incorrect') && !onResumeDisabled && (
               <button className="btn btn--ghost btn--sm" onClick={() => onResume(solve.id)}>
                 Resume
               </button>
@@ -125,21 +114,22 @@ function SolveCard({
   )
 }
 
-/** One card for a problem sheet (group of whiteboards). */
 function SheetCard({
   groupSolves,
   onDeleteGroup,
   onResume,
+  onResumeDisabled,
 }: {
   groupSolves: Solve[]
   onDeleteGroup: (ids: string[]) => void
   onResume: (id: string) => void
+  onResumeDisabled?: boolean
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const first = groupSolves[0]
   const completedCount = groupSolves.filter((s) => s.status === 'completed').length
-  const hasActive = groupSolves.some((s) => s.status === 'active')
-  const resumeTarget = groupSolves.find((s) => s.status === 'active') ?? first
+  const hasActive = groupSolves.some((s) => s.status === 'active' || s.status === 'incorrect')
+  const resumeTarget = groupSolves.find((s) => s.status === 'active' || s.status === 'incorrect') ?? first
 
   const mostRecentSolve = useMemo(() => {
     const withThumbnail = groupSolves.filter((s) => s.finalWorking)
@@ -152,7 +142,7 @@ function SheetCard({
   }, [groupSolves])
 
   return (
-    <article className="solve-card solve-card--sheet">
+    <article className="solve-card solve-card--sheet dashboard-card">
       <div className="solve-card__thumbnail solve-card__thumbnail--sheet">
         {mostRecentSolve?.finalWorking ? (
           <img src={`data:image/jpeg;base64,${mostRecentSolve.finalWorking}`} alt="Most recent whiteboard" />
@@ -175,7 +165,7 @@ function SheetCard({
         </p>
         <div className="solve-card__footer">
           <div className="solve-card__actions">
-            {hasActive && (
+            {hasActive && !onResumeDisabled && (
               <button className="btn btn--ghost btn--sm" onClick={() => onResume(resumeTarget.id)}>
                 Resume
               </button>
@@ -207,9 +197,54 @@ function SheetCard({
   )
 }
 
-export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVideo, onOpenChat }: Props) {
+function VideoCard({
+  item,
+  onRegenerate,
+  onViewScript,
+}: {
+  item: { question: string; timestamp: number; script?: string }
+  onRegenerate: () => void
+  onViewScript: () => void
+}) {
+  const questionPreview = item.question.length > 100 ? item.question.slice(0, 100) + '…' : item.question
+
+  return (
+    <article className="dashboard-video-card dashboard-card">
+      <div className="dashboard-video-card__thumbnail">
+        <span className="dashboard-video-card__icon">🎬</span>
+      </div>
+      <div className="dashboard-video-card__body">
+        <div className="dashboard-video-card__meta">
+          <span className="solve-card__badge solve-card__badge--completed">Video</span>
+          <span className="solve-card__date">{formatDate(item.timestamp)}</span>
+        </div>
+        <p className="dashboard-video-card__question">{questionPreview}</p>
+        {item.script && (
+          <button className="btn btn--ghost btn--sm dashboard-video-card__script-toggle" onClick={onViewScript}>
+            View script
+          </button>
+        )}
+        <div className="dashboard-video-card__actions">
+          <button className="btn btn--ghost btn--sm" onClick={onRegenerate}>
+            Generate again →
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+type View = 'overview' | 'past-solves'
+
+export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVideo, onOpenChat, onOpenProfile }: Props) {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const urlView = searchParams.get('view') === 'past-solves' ? 'past-solves' : 'overview'
   const [solves, setSolves] = useState<Solve[]>([])
+  const [videoGenerations, setVideoGenerations] = useState<{ question: string; timestamp: number; script?: string }[]>([])
+  const [scriptView, setScriptView] = useState<{ question: string; script: string } | null>(null)
   const [loading, setLoading] = useState(true)
+  const view = urlView
 
   const refetchSolves = useCallback(() => {
     getSolves()
@@ -222,12 +257,42 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
     refetchSolves()
   }, [refetchSolves])
 
-  // Refetch when returning to dashboard (e.g. from whiteboard) so thumbnails update
   useEffect(() => {
-    const onFocus = () => refetchSolves()
+    getUserMetadata(user.id)
+      .then((meta) => {
+        if (meta?.videoGenerations?.length) {
+          setVideoGenerations([...meta.videoGenerations].reverse())
+        } else if (meta?.recentInputs?.length) {
+          const videos = meta.recentInputs
+            .filter((r) => r.type === 'video')
+            .map((r) => ({ question: r.content, timestamp: r.timestamp }))
+            .reverse()
+          setVideoGenerations(videos)
+        }
+      })
+      .catch(() => {})
+  }, [user.id])
+
+  useEffect(() => {
+    const onFocus = () => {
+      refetchSolves()
+      getUserMetadata(user.id)
+        .then((meta) => {
+          if (meta?.videoGenerations?.length) {
+            setVideoGenerations([...meta.videoGenerations].reverse())
+          } else if (meta?.recentInputs?.length) {
+            const videos = meta.recentInputs
+              .filter((r) => r.type === 'video')
+              .map((r) => ({ question: r.content, timestamp: r.timestamp }))
+              .reverse()
+            setVideoGenerations(videos)
+          }
+        })
+        .catch(() => {})
+    }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [refetchSolves])
+  }, [refetchSolves, user.id])
 
   async function handleDelete(id: string) {
     await deleteSolve(id)
@@ -240,132 +305,179 @@ export function DashboardPage({ user, onNewProblem, onResumeSolve, onGenerateVid
   }
 
   const displayName = user.name ?? user.email.split('@')[0]
-  const mathematician = useMemo(() => getMathematicianForUser(user.id), [user.id])
 
-  const { standaloneActive, standaloneCompleted, groupsActive, groupsCompleted } = useMemo(() => {
-    const active = solves.filter((s) => s.status === 'active')
+  const { standaloneActive, standaloneCompleted, groupsActive, groupsCompleted, allPast } = useMemo(() => {
+    const active = solves.filter((s) => s.status === 'active' || s.status === 'incorrect')
     const completed = solves.filter((s) => s.status === 'completed')
+    const sortByRecent = (a: Solve, b: Solve) =>
+      (b.completedAt ?? b.createdAt) - (a.completedAt ?? a.createdAt)
     const standaloneActive = active.filter((s) => !s.groupId)
-    const standaloneCompleted = completed.filter((s) => !s.groupId)
+    const standaloneCompleted = completed.filter((s) => !s.groupId).sort(sortByRecent)
     const groupIds = [...new Set(solves.map((s) => s.groupId).filter(Boolean))] as string[]
     const groupsActive: Solve[][] = []
     const groupsCompleted: Solve[][] = []
     for (const gid of groupIds) {
       const group = solves.filter((s) => s.groupId === gid).sort((a, b) => (a.questionIndex ?? 0) - (b.questionIndex ?? 0))
-      const hasActive = group.some((s) => s.status === 'active')
+      const hasActive = group.some((s) => s.status === 'active' || s.status === 'incorrect')
       if (hasActive) groupsActive.push(group)
       else groupsCompleted.push(group)
     }
-    return { standaloneActive, standaloneCompleted, groupsActive, groupsCompleted }
+    groupsCompleted.sort((a, b) => {
+      const aMax = Math.max(...a.map((s) => s.completedAt ?? s.createdAt))
+      const bMax = Math.max(...b.map((s) => s.completedAt ?? s.createdAt))
+      return bMax - aMax
+    })
+    const allPast = {
+      standalone: standaloneCompleted,
+      groups: groupsCompleted,
+    }
+    return { standaloneActive, standaloneCompleted, groupsActive, groupsCompleted, allPast }
   }, [solves])
+
+  const hasInProgress = standaloneActive.length > 0 || groupsActive.length > 0
+  const hasPast = standaloneCompleted.length > 0 || groupsCompleted.length > 0
 
   return (
     <div className="dashboard-page">
-      {/* Hero */}
-      <section className="dashboard-hero">
-        <h1 className="dashboard-greeting">
-          {getGreeting()}, {displayName}.
-        </h1>
-        <div className="dashboard-stats">
-          <span>{solves.length} problem{solves.length !== 1 ? 's' : ''} total</span>
-          <span>·</span>
-          <span>{standaloneCompleted.length + groupsCompleted.length} completed</span>
-          {standaloneActive.length + groupsActive.length > 0 && (
-            <>
-              <span>·</span>
-              <span>{standaloneActive.length + groupsActive.length} in progress</span>
-            </>
+      {scriptView && (
+        <div className="script-view-overlay" onClick={() => setScriptView(null)}>
+          <div className="script-view-screen" onClick={(e) => e.stopPropagation()}>
+            <div className="script-view__header">
+              <h2 className="script-view__title">Video script</h2>
+              <button className="btn btn--ghost btn--sm" onClick={() => setScriptView(null)}>Close</button>
+            </div>
+            <p className="script-view__question">{scriptView.question}</p>
+            <div className="script-view__content">{scriptView.script}</div>
+          </div>
+        </div>
+      )}
+      <main className="dashboard-main">
+        <header className="dashboard-hero">
+          <h1 className="dashboard-greeting">
+            <ReactTyped
+              strings={[`${getGreeting()}, ${displayName}.`]}
+              typeSpeed={40}
+              showCursor={false}
+              loop={false}
+            />
+          </h1>
+          <div className="dashboard-stats">
+            <span>{solves.length} problem{solves.length !== 1 ? 's' : ''} total</span>
+            <span>·</span>
+            <span>{standaloneCompleted.length + groupsCompleted.length} completed</span>
+            {hasInProgress && (
+              <>
+                <span>·</span>
+                <span>{standaloneActive.length + groupsActive.length} in progress</span>
+              </>
+            )}
+          </div>
+        </header>
+
+        <div className="dashboard-content">
+          {loading ? (
+            <div className="dashboard-loading">
+              <div className="solve-loading-spinner" />
+              <p>Loading…</p>
+            </div>
+          ) : view === 'overview' ? (
+            <div className="dashboard-view dashboard-view--overview">
+              {!hasInProgress && videoGenerations.length === 0 ? (
+                <div className="empty-state dashboard-empty">
+                  <div className="empty-state__icon">📐</div>
+                  <h2 className="empty-state__title">No solves yet</h2>
+                  <p className="empty-state__body">
+                    Start your first problem from the sidebar — your work and feedback will be saved here.
+                  </p>
+                  <button className="btn btn--primary btn--lg" onClick={onNewProblem} style={{ marginTop: 20 }}>
+                    Start a new problem
+                    <span className="btn__arrow">→</span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {hasInProgress && (
+                    <section className="solve-section dashboard-section">
+                      <h2 className="solve-section__title">In Progress</h2>
+                      <div className="solve-grid">
+                        {standaloneActive.map((s, i) => (
+                          <SolveCard
+                            key={s.id}
+                            solve={s}
+                            onDelete={handleDelete}
+                            onResume={onResumeSolve}
+                            onResumeDisabled={false}
+                          />
+                        ))}
+                        {groupsActive.map((group) => (
+                          <SheetCard
+                            key={group[0].groupId}
+                            groupSolves={group}
+                            onDeleteGroup={handleDeleteGroup}
+                            onResume={onResumeSolve}
+                            onResumeDisabled={false}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  {videoGenerations.length > 0 && (
+                    <section className="solve-section dashboard-section">
+                      <h2 className="solve-section__title">Recent video explanations</h2>
+                      <div className="solve-grid dashboard-video-grid">
+                        {videoGenerations.slice(0, 6).map((item, i) => (
+                          <VideoCard
+                            key={`${item.timestamp}-${i}`}
+                            item={item}
+                            onRegenerate={() => navigate('/manim', { state: { suggestedQuestion: item.question } })}
+                            onViewScript={() => item.script && setScriptView({ question: item.question, script: item.script })}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="dashboard-view dashboard-view--past">
+              {!hasPast ? (
+                <div className="empty-state dashboard-empty">
+                  <div className="empty-state__icon">📋</div>
+                  <h2 className="empty-state__title">No past solves yet</h2>
+                  <p className="empty-state__body">
+                    Complete a problem to see it here.
+                  </p>
+                </div>
+              ) : (
+                <section className="solve-section dashboard-section">
+                  <h2 className="solve-section__title">All past solves</h2>
+                  <div className="solve-grid">
+                    {allPast.standalone.map((s) => (
+                      <SolveCard
+                        key={s.id}
+                        solve={s}
+                        onDelete={handleDelete}
+                        onResume={() => {}}
+                        onResumeDisabled
+                      />
+                    ))}
+                    {allPast.groups.map((group) => (
+                      <SheetCard
+                        key={group[0].groupId}
+                        groupSolves={group}
+                        onDeleteGroup={handleDeleteGroup}
+                        onResume={onResumeSolve}
+                        onResumeDisabled
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
           )}
         </div>
-
-        {/* CTAs */}
-        <div className="dashboard-ctas">
-          <button className="btn btn--primary btn--lg" onClick={onNewProblem}>
-            <span>Start a new problem</span>
-            <span className="btn__arrow">→</span>
-          </button>
-          <button
-            className="btn btn--ghost btn--lg"
-            onClick={onOpenChat}
-          >
-            Talk to <span className="dashboard-ai-name">{mathematician}</span>
-          </button>
-          <button
-            className="btn btn--ghost btn--lg"
-            onClick={onGenerateVideo}
-          >
-            🎬 Video explanation
-          </button>
-        </div>
-      </section>
-
-      {/* Solve history */}
-      <main className="solve-list-page__main">
-        {loading ? (
-          <div className="empty-state">
-            <p className="empty-state__body">Loading…</p>
-          </div>
-        ) : solves.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state__icon">📐</div>
-            <h2 className="empty-state__title">No solves yet</h2>
-            <p className="empty-state__body">
-              Start your first problem above — your work and feedback will be saved here.
-            </p>
-          </div>
-        ) : (
-          <>
-            {(standaloneActive.length > 0 || groupsActive.length > 0) && (
-              <section className="solve-section">
-                <h2 className="solve-section__title">In Progress</h2>
-                <div className="solve-grid">
-                  {standaloneActive.map((s) => (
-                    <SolveCard
-                      key={s.id}
-                      solve={s}
-                      onDelete={handleDelete}
-                      onResume={onResumeSolve}
-                    />
-                  ))}
-                  {groupsActive.map((group) => (
-                    <SheetCard
-                      key={group[0].groupId}
-                      groupSolves={group}
-                      onDeleteGroup={handleDeleteGroup}
-                      onResume={onResumeSolve}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {(standaloneCompleted.length > 0 || groupsCompleted.length > 0) && (
-              <section className="solve-section">
-                <h2 className="solve-section__title">Past Solves</h2>
-                <div className="solve-grid">
-                  {standaloneCompleted.map((s) => (
-                    <SolveCard
-                      key={s.id}
-                      solve={s}
-                      onDelete={handleDelete}
-                      onResume={() => {}}
-                    />
-                  ))}
-                  {groupsCompleted.map((group) => (
-                    <SheetCard
-                      key={group[0].groupId}
-                      groupSolves={group}
-                      onDeleteGroup={handleDeleteGroup}
-                      onResume={onResumeSolve}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-          </>
-        )}
       </main>
-
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { register, login, loginWithGoogle } from '../lib/auth'
 import type { User } from '../types'
 import { WhiteboardBackground } from './WhiteboardBackground'
+import logoImg from '../assets/logo.png'
 
 interface Props {
   onSuccess: (data: { user: User; onboardingComplete: boolean }) => void
@@ -65,15 +66,12 @@ export function AuthPage({ onSuccess }: Props) {
       }}>
         {/* Logo / heading */}
         <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: '2.5rem',
-            fontWeight: 400,
-            color: 'var(--text)',
-            marginBottom: '8px',
-          }}>
-            Epsilon-Delta
-          </h1>
+          <img
+            src={logoImg}
+            alt="Epsilon-Delta"
+            className="auth-logo"
+            style={{ display: 'block', margin: '0 auto 16px', maxWidth: '180px', height: 'auto' }}
+          />
           <p style={{ color: 'var(--text-2)', fontSize: '1rem' }}>
             {mode === 'signin' ? 'Welcome back — sign in to continue.' : 'Create your account to get started.'}
           </p>

@@ -6,6 +6,11 @@ import {
   deleteSolveFromFirestore,
 } from './firebaseSolves'
 import {
+  saveConversationToFirestore,
+  getRecentConversationsFromFirestore,
+} from './firebaseConversations'
+import type { ConversationMessage } from './firebaseConversations'
+import {
   getWhiteboardFromFirestore,
   saveWhiteboardToFirestore,
 } from './firebaseWhiteboards'
@@ -78,6 +83,21 @@ export function getLegacySolvesFromLocalStorage(): Solve[] | null {
   } catch {
     return null
   }
+}
+
+/** Save tutor conversation when user ends it. */
+export async function saveConversation(messages: ConversationMessage[]): Promise<void> {
+  const uid = auth.currentUser?.uid
+  if (!uid || !messages.length) return
+  await saveConversationToFirestore(uid, messages)
+}
+
+/** Get recent tutor conversations for context. */
+export async function getRecentConversations(): Promise<{ messages: ConversationMessage[] }[]> {
+  const uid = auth.currentUser?.uid
+  if (!uid) return []
+  const convs = await getRecentConversationsFromFirestore(uid, 3)
+  return convs.map((c) => ({ messages: c.messages }))
 }
 
 /** Remove legacy solve key from localStorage after migration. */
