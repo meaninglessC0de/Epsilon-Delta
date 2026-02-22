@@ -272,6 +272,8 @@ export interface TutorResponse {
   equation?: string
   /** Optional graph to display when discussing a function or relationship. */
   graph?: TutorGraphSpec
+  /** When set, navigate to the video generator after speaking — value is the topic/question to pre-fill. */
+  openVideo?: string
 }
 
 export interface EvaluateAnswerResult {
@@ -347,7 +349,7 @@ export async function chatWithTutorStructured(
   const systemPrompt = `You are ${tutorName}, a warm maths tutor in a voice conversation. The student hears you (TTS) and sees a short on-screen summary. ${name}
 ${memorySections.length ? '\n' + memorySections.join('\n') : ''}
 
-Reply with a JSON object only: {"content":"...","speak":"...","isQuestion":false,"equation":"optional","graph":"optional"}
+Reply with a JSON object only: {"content":"...","speak":"...","isQuestion":false,"equation":"optional","graph":"optional","openVideo":"optional"}
 
 - speak: What to say aloud (TTS). Plain English, 1-3 short sentences. Use words for maths: "x squared" not "x²". Be specific and helpful — avoid vague phrases like "you need to understand". Explain the actual step or concept clearly.
 ANTI-REPETITION: Do NOT repeat what you have already said in this conversation. If the student asks for an example, give a NEW example — vary numbers, wording, and approach. Remember what you've already explained and build on it; never parrot earlier content.
@@ -358,7 +360,8 @@ ANTI-REPETITION: Do NOT repeat what you have already said in this conversation. 
   - {"type":"quadratic","a":1,"b":0,"c":0,"xMin":-5,"xMax":5} for y = ax² + bx + c
   - {"type":"line","slope":1,"intercept":0,"xMin":-5,"xMax":5} for y = mx + c
   - {"type":"points","points":[[0,0],[1,1],[2,4]],"xMin":0,"xMax":5,"yMin":0,"yMax":10}
-  Omit graph if not relevant.`
+  Omit graph if not relevant.
+- openVideo: Set ONLY when the student explicitly asks for a video explanation (e.g. "show me a video", "can you make a video about this", "video explanation please"). Value should be a concise topic or question derived from the conversation (e.g. "Explain how to solve quadratic equations by factorising"). Omit otherwise.`
 
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -383,6 +386,7 @@ ANTI-REPETITION: Do NOT repeat what you have already said in this conversation. 
       isQuestion: !!parsed.isQuestion,
       equation: parsed.equation,
       graph: parsed.graph,
+      openVideo: typeof parsed.openVideo === 'string' && parsed.openVideo.trim() ? parsed.openVideo.trim() : undefined,
     }
   } catch {
     return { content: 'Key point', speak: fallback }

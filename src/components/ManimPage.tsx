@@ -44,8 +44,8 @@ export function ManimPage({ onBack }: Props) {
       return
     }
     setLoadingStage(0)
-    const t1 = setTimeout(() => setLoadingStage(1), 2500)
-    const t2 = setTimeout(() => setLoadingStage(2), 5000)
+    const t1 = setTimeout(() => setLoadingStage(1), 1500)
+    const t2 = setTimeout(() => setLoadingStage(2), 3500)
     loadingTimers.current = [t1, t2]
     return () => {
       clearTimeout(t1)

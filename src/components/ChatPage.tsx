@@ -244,13 +244,24 @@ export function ChatPage({ user, onBack }: Props) {
 
           stopMic()
           setPhaseSync('ai_speaking')
-          speakText(res.speak, () => {
+          const onSpeakDone = () => {
             if (!isMountedRef.current) return
+            if (res.openVideo) {
+              stopSpeaking()
+              navigate('/manim', { state: { fromChat: true, suggestedQuestion: res.openVideo } })
+              return
+            }
             if (phaseRef.current === 'ai_speaking') {
               setPhaseSync('user_listening')
               startListening()
             }
-          }).catch(() => {
+          }
+          speakText(res.speak, onSpeakDone).catch(() => {
+            if (!isMountedRef.current) return
+            if (res.openVideo) {
+              navigate('/manim', { state: { fromChat: true, suggestedQuestion: res.openVideo } })
+              return
+            }
             if (isMountedRef.current && phaseRef.current === 'ai_speaking') {
               setPhaseSync('user_listening')
               setNeedsTapToSpeak(true)
