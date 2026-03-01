@@ -1,5 +1,5 @@
 # Epsilon-Delta
-A network of mathematical agents
+Your adaptive mathematics tutor
 
 ## Firebase setup
 
